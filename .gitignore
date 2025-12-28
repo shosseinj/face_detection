@@ -8,9 +8,10 @@ weights/*.pth
 weights/*.pt
 weights/*.ckpt
 *.onnx
-
+*.mp4
+*.jpg
 widerface_evaluation
-
+*.pkl
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
