@@ -12,7 +12,7 @@ from config import get_config
 from models import RetinaFace
 from utils.general import draw_detections
 from utils.box_utils import decode, decode_landmarks, nms
-
+from recongnizer import *
 import cv2
 
 # found = False
@@ -259,6 +259,8 @@ def open_capture(source, max_index_search=5, backend_pref='any'):
 
 
     # Low-latency background frame grabber (keeps only the latest frame)
+
+
 class FrameGrabber(threading.Thread):
         def __init__(self, cap):
             super().__init__(daemon=True)
@@ -342,7 +344,8 @@ def main(params):
         cv2.namedWindow("RetinaFace GPU", cv2.WINDOW_NORMAL)
 
     frame = first_frame
-
+    embeddings_dict = torch.load("./database/personnel_embeddings.pt")
+    embeddings_dict = {k: v.to('cuda') for k, v in embeddings_dict.items()}
     with torch.no_grad():
         while True:
             if grabber:
@@ -409,15 +412,53 @@ def main(params):
 
             # Draw
             for i in range(dets.shape[0]):
-                x1, y1, x2, y2, s = dets[i]
-                if s < params.conf_threshold:
+                x1, y1, x2, y2, score = dets[i]
+                if score < params.conf_threshold:
                     continue
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
 
-                for j in range(5):
-                    x = int(landmarks[i][2 * j])
-                    y = int(landmarks[i][2 * j + 1])
-                    cv2.circle(frame, (x, y), 2, (0, 0, 255), -1)
+                # Crop face
+                face_crop = frame[int(y1):int(y2), int(x1):int(x2)]
+                face_crop = cv2.cvtColor(face_crop, cv2.COLOR_BGR2RGB)
+                face_crop = cv2.resize(face_crop, (160, 160))  # For InceptionResnetV1
+                face_tensor = torch.tensor(face_crop).permute(2,0,1).unsqueeze(0).float().to(device)
+
+        
+                face_embedding = recognizer(face_tensor)
+
+           
+
+
+                import torch.nn.functional as F
+
+                if face_embedding.dim() == 1:
+                    face_embedding = face_embedding.unsqueeze(0) 
+
+                face_embedding = F.normalize(face_embedding, dim=1)
+
+                name = "Unknown"
+                max_sim = -1.0
+
+                for person_name, person_emb in embeddings_dict.items():
+                    # Ensure person_emb is 2D: (1, 512)
+                    if person_emb.dim() == 1:
+                        person_emb = person_emb.unsqueeze(0)
+
+                    person_emb = F.normalize(person_emb, dim=1)
+
+                    # Compute cosine similarity along feature dimension
+                    sim = F.cosine_similarity(face_embedding, person_emb, dim=1)  # shape: (1,)
+                    
+                    sim_val = sim.item()  # safe now, scalar
+                    if sim_val > 0.9 and sim_val > max_sim:
+                        max_sim = sim_val
+                        name = person_name
+
+
+                # Draw rectangle and name
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0,255,0), 2)
+                cv2.putText(frame, name, (int(x1), int(y1)-10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,255), 2)
+
 
             if video_writer:
                 video_writer.write(frame)
