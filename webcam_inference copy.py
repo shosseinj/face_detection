@@ -288,167 +288,147 @@ class FrameGrabber(threading.Thread):
 def main(params):
     cfg = get_config(params.network)
     if cfg is None:
-        raise KeyError(f"Config file for {params.network} not found!")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        raise KeyError(f"No config for network {params.network}")
+
+    # 🔥 GPU ONLY
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required. GPU-only mode enabled.")
+
+    device = torch.device("cuda")
+    print(f"Using GPU: {torch.cuda.get_device_name(0)}")
+
     rgb_mean = (104, 117, 123)
-    resize_factor = 1
 
-    # model initialization
-    model = RetinaFace(cfg=cfg)
-    model.to(device)
+    # Model
+    model = RetinaFace(cfg=cfg).to(device)
+    model.eval()
 
-    # loading state_dict
-    state_dict = torch.load(params.weights, map_location="cpu", weights_only=True)
+    # Load weights DIRECTLY to GPU
+    state_dict = torch.load(params.weights, map_location="cuda", weights_only=True)
     model.load_state_dict(state_dict)
-    print("Model loaded successfully!")
- 
+    print("Model loaded successfully to GPU")
+
+    # Open camera
     cap, first_frame = open_capture(params.source, backend_pref=params.backend)
-
-
-
-
     if cap is None or not cap.isOpened() or first_frame is None:
-        print("Error: Could not open video source or read an initial frame. Check camera connection, permissions, or whether another app is using the camera.")
+        print("Failed to open video source")
         return
 
-    frame_height, frame_width = first_frame.shape[:2]
+    frame_h, frame_w = first_frame.shape[:2]
 
-    # Initialize video writer if save option is enabled
+    # Video writer
     video_writer = None
     if params.save_video:
-        # Ensure output directory exists
-        output_dir = os.path.dirname(params.output_path)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        # Define codec and create VideoWriter object
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # You can change the codec as needed
-        video_writer = cv2.VideoWriter(params.output_path, fourcc, params.fps, (frame_width, frame_height))
-        print(f"Video will be saved to: {params.output_path}")
-
+        os.makedirs(os.path.dirname(params.output_path), exist_ok=True)
+        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+        video_writer = cv2.VideoWriter(
+            params.output_path, fourcc, params.fps, (frame_w, frame_h)
+        )
 
     grabber = None
-    if getattr(params, 'low_latency', False) and params.source.isdigit():
+    if params.low_latency and params.source.isdigit():
         grabber = FrameGrabber(cap)
         grabber.start()
-        # use already captured first_frame as initial latest
         with grabber.lock:
             grabber.latest = first_frame
 
-    # Create display window and show initial frame (if display not disabled)
-    if not getattr(params, 'no_display', False):
-        try:
-            cv2.namedWindow('Webcam Inference', cv2.WINDOW_NORMAL)
-            cv2.imshow('Webcam Inference', first_frame)
-            # Force GUI event processing
-            cv2.waitKey(1)
-            vis = cv2.getWindowProperty('Webcam Inference', cv2.WND_PROP_VISIBLE)
-            if vis < 1:
-                print('Warning: display window is not visible. If you are running headless, use --no-display.')
-        except Exception as e:
-            print(f'Warning: could not create display window: {e}')
+    if not params.no_display:
+        cv2.namedWindow("RetinaFace GPU", cv2.WINDOW_NORMAL)
 
-    # Process the first frame we already captured
     frame = first_frame
 
-    while True:
-        # In low-latency mode, always grab the latest available frame from
-        # the background grabber. Otherwise, read from capture directly.
-        if grabber is not None:
-            frame = grabber.get_latest()
-            if frame is None:
-                # no frame available yet; small sleep to avoid busy loop
-                time.sleep(0.005)
+    with torch.no_grad():
+        while True:
+            if grabber:
+                frame = grabber.get_latest()
+                if frame is None:
+                    time.sleep(0.005)
+                    continue
+            else:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+
+            image, resize_factor = resize_image(
+                frame, target_shape=(params.target_size, params.target_size)
+            )
+
+            image = np.float32(image)
+            img_h, img_w, _ = image.shape
+            image -= rgb_mean
+            image = image.transpose(2, 0, 1)
+            image = torch.from_numpy(image).unsqueeze(0).to(device, non_blocking=True)
+
+            use_amp = params.fp16
+            with torch.cuda.amp.autocast(enabled=use_amp):
+                loc, conf, landmarks = model(image)
+
+            # 🔴 IMPORTANT: width, height order
+            priorbox = PriorBox(cfg, image_size=(img_w, img_h))
+            priors = priorbox.generate_anchors().to(device)
+
+            boxes = decode(loc.squeeze(0), priors, cfg['variance'])
+            landmarks = decode_landmarks(landmarks.squeeze(0), priors, cfg['variance'])
+
+            boxes *= torch.tensor([img_w, img_h, img_w, img_h], device=device)
+            boxes /= resize_factor
+
+            landmarks *= torch.tensor([img_w, img_h] * 5, device=device)
+            landmarks /= resize_factor
+
+            scores = conf.squeeze(0)[:, 1]
+
+            keep = scores > params.conf_threshold
+            boxes = boxes[keep]
+            landmarks = landmarks[keep]
+            scores = scores[keep]
+
+            if scores.numel() == 0:
+                if not params.no_display:
+                    cv2.imshow("RetinaFace GPU", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
                 continue
-        else:
-            ret, frame = cap.read()
-            if not ret or frame is None:
-                print("Error: Could not read frame.")
-                break
 
-        image, resize_factor = resize_image(frame, target_shape=(params.target_size, params.target_size))
+            scores, order = scores.sort(descending=True)
+            order = order[:params.pre_nms_topk]
+            boxes = boxes[order]
+            landmarks = landmarks[order]
 
-        # Prepare image for inference
-        image = np.float32(image)
-        img_height, img_width, _ = image.shape
-        image -= rgb_mean
-        image = image.transpose(2, 0, 1)  # HWC -> CHW
-        image = torch.from_numpy(image).unsqueeze(0).to(device)
+            dets = torch.cat([boxes, scores.unsqueeze(1)], dim=1)
+            keep = nms(dets.cpu().numpy(), params.nms_threshold)
 
-        # forward pass (use mixed precision if requested and CUDA is available)
-        use_amp = params.fp16 and device.type == 'cuda'
-        loc, conf, landmarks = inference(model, image, use_amp=use_amp)
+            dets = dets[keep][:params.post_nms_topk].cpu().numpy()
+            landmarks = landmarks[keep][:params.post_nms_topk].cpu().numpy()
 
-        # generate anchor boxes
-        priorbox = PriorBox(cfg, image_size=(img_height, img_width))
-        priors = priorbox.generate_anchors().to(device)
+            # Draw
+            for i in range(dets.shape[0]):
+                x1, y1, x2, y2, s = dets[i]
+                if s < params.conf_threshold:
+                    continue
+                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
 
-        # decode boxes and landmarks
-        boxes = decode(loc, priors, cfg['variance'])
-        landmarks = decode_landmarks(landmarks, priors, cfg['variance'])
+                for j in range(5):
+                    x = int(landmarks[i][2 * j])
+                    y = int(landmarks[i][2 * j + 1])
+                    cv2.circle(frame, (x, y), 2, (0, 0, 255), -1)
 
-        # scale adjustments
-        bbox_scale = torch.tensor([img_width, img_height] * 2, device=device)
-        boxes = (boxes * bbox_scale / resize_factor).cpu().numpy()
+            if video_writer:
+                video_writer.write(frame)
 
-        landmark_scale = torch.tensor([img_width, img_height] * 5, device=device)
-        landmarks = (landmarks * landmark_scale / resize_factor).cpu().numpy()
+            if not params.no_display:
+                cv2.imshow("RetinaFace GPU", frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
 
-        scores = conf.cpu().numpy()[:, 1]
-
-        # filter by confidence threshold
-        inds = scores > params.conf_threshold
-        boxes = boxes[inds]
-        landmarks = landmarks[inds]
-        scores = scores[inds]
-
-        # sort by scores
-        order = scores.argsort()[::-1][:params.pre_nms_topk]
-        boxes, landmarks, scores = boxes[order], landmarks[order], scores[order]
-
-        # apply NMS
-        detections = np.hstack((boxes, scores[:, np.newaxis])).astype(np.float32, copy=False)
-        keep = nms(detections, params.nms_threshold)
-
-        detections = detections[keep]
-        landmarks = landmarks[keep]
-
-        # keep top-k detections and landmarks
-        detections = detections[:params.post_nms_topk]
-        landmarks = landmarks[:params.post_nms_topk]
-
-        # concatenate detections and landmarks
-        detections = np.concatenate((detections, landmarks), axis=1)
-
-        # draw detections on the frame
-        draw_detections(frame, detections, params.vis_threshold)
-
-        # Write frame to output video if enabled
-        if params.save_video and video_writer is not None:
-            video_writer.write(frame)
-
-        # Display the resulting frame (unless disabled)
-        if not getattr(params, 'no_display', False):
-            try:
-                cv2.imshow('Webcam Inference', frame)
-            except Exception:
-                pass
-
-        # Press 'q' to quit
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    # Release resources
-    if grabber is not None:
+    if grabber:
         grabber.stop()
-        grabber.join(timeout=1.0)
+        grabber.join()
+
     cap.release()
-    if video_writer is not None:
+    if video_writer:
         video_writer.release()
     cv2.destroyAllWindows()
-
-    if params.save_video:
-        print(f"Video saved successfully to {params.output_path}")
 
 
 if __name__ == '__main__':
