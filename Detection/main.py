@@ -19,7 +19,7 @@ import jdatetime
 def parse_arguments():
     parser = argparse.ArgumentParser("RetinaFace GPU Minimal")
 
-    parser.add_argument("--weights", default="./models/weights/retinaface_mv2.pth")
+    parser.add_argument("--weights", default="./weights/retinaface_mv2.pth")
     parser.add_argument("--network", default="mobilenetv2")
     parser.add_argument("--source", default="0")
 
@@ -32,7 +32,7 @@ def parse_arguments():
                        help="Directory to save detected faces")
     parser.add_argument("--save-format", default="jpg", choices=["jpg", "png"],
                        help="Image format for saving faces")
-    parser.add_argument("--save-every-n", type=int, default=1,
+    parser.add_argument("--save-every-n", type=int, default=8,
                        help="Save every N detections (to avoid duplicates)")
                        
 
@@ -67,12 +67,32 @@ def resize_image(frame, size):
 
     return canvas, scale
 
-
+def find_camera():
+    """Try different camera indices"""
+    for idx in range(0, 10):  # Try indices 0-9
+        cap = cv2.VideoCapture(idx)
+        if cap.isOpened():
+            print(f"✓ Found camera at index {idx}")
+            # Test if we can read a frame
+            return idx
+            ret, frame = cap.read()
+            if ret:
+                print(f"  Resolution: {frame.shape[1]}x{frame.shape[0]}")
+                return cap
+            else:
+                cap.release()
+                print(f"  Camera {idx} found but cannot read frames")
+        else:
+            cap.release()
+    
+    raise RuntimeError("Cannot find any working camera")
 # ===============================
 # Open camera
 # ===============================
 def open_capture(source):
-    cap = cv2.VideoCapture(int(source))  # Remove cv2.CAP_DSHOW
+    # value = find_camera()
+    # print('value',value)
+    cap = cv2.VideoCapture(int(1))  # Remove cv2.CAP_DSHOW
     if not cap.isOpened():
         raise RuntimeError("Cannot open camera")
     return cap
@@ -106,7 +126,7 @@ def main(args):
 
 
 
-    app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    app = FaceAnalysis(name="buffalo_l", providers=["GPUExecutionProvider"])
     app.prepare(ctx_id=0, det_size=(640, 640))
 
     client = QdrantClient(host="localhost", port=6333)
@@ -161,12 +181,15 @@ def main(args):
 
                 dets = dets[keep].cpu().numpy()
                 landmarks = landmarks[keep].cpu().numpy()
-               
+                
                 for i in range(dets.shape[0]):
                     x1, y1, x2, y2, score = dets[i]
                     
                     # Convert to integers for drawing
                     x1_i, y1_i, x2_i, y2_i = int(x1), int(y1), int(x2), int(y2)
+                    
+                    # Initialize name as "Unknown"
+                    person_name = "Unknown"
                     
                     # Draw rectangle
                     cv2.rectangle(
@@ -177,11 +200,67 @@ def main(args):
                         2
                     )
                     
-                    # Draw score
+                    # Extract face from original frame for recognition
+                    face_img = extract_face(
+                        original_frame, 
+                        [x1_i, y1_i, x2_i, y2_i],
+                        margin=0.4,
+                        min_size=args.min_face_size
+                    )
+                    
+                    if face_img is not None :
+                        # Get embedding for recognition
+                        faces = app.get(face_img)
+                        if faces:
+                            q_emb = faces[0].embedding.astype("float32")
+                            
+                            # Query Qdrant for matches
+                            result = client.query_points(
+                                collection_name="face_embeddings",
+                                query=q_emb.tolist(),
+                                limit=1  # Get only the best match
+                            )
+                            
+                            if result.points:
+                                best_match = result.points[0]
+                                sim = 1 - best_match.score
+                                
+                                # Set threshold for recognition (adjust as needed)
+                                # if sim > 0.6:  # Similarity threshold
+                                #     path = best_match.payload.get("image_path", "Unknown")
+                                #     # Extract name from path (assuming format like "database/name/image.jpg")
+                                #     if "/" in path:
+                                #         # Get the directory name which should be the person's name
+                                #         dir_name = path.split("/")[-2]
+                                #         person_name = dir_name
+                                person_name = best_match.payload.get("person", "Unknown")
+                                # Add similarity to display if needed
+                                person_name_display = f"{person_name} ({sim:.2f})"
+                    
+                    # Draw name on bounding box
+                    # Calculate text size for background
+                    text_size = cv2.getTextSize(person_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
+                    
+                    # Draw background rectangle for text
+                    cv2.rectangle(
+                        frame,
+                        (x1_i, y1_i - text_size[1] - 10),
+                        (x1_i + text_size[0] + 10, y1_i),
+                        (0, 255, 0),
+                        -1  # Filled rectangle
+                    )
+                    
+                    # Draw name text
+                    cv2.putText(frame, person_name, 
+                            (x1_i + 5, y1_i - 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (0, 0, 0), 2)  # Black text
+                    
+                    # Draw score (optional - below the name or in different location)
                     cv2.putText(frame, f"{score:.2f}", 
-                              (x1_i, y1_i - 10),
-                              cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                              (0, 255, 0), 2)
+                            (x1_i, y1_i + 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            (0, 255, 0), 1)
                     
                     # Draw landmarks
                     for j in range(5):
@@ -201,82 +280,30 @@ def main(args):
                         (y2_i - y1_i) >= args.min_face_size
                     )
                     
-                    if should_save :
-                        # Extract face from original frame
-                        face_img = extract_face(
-                            original_frame, 
-                            [x1_i, y1_i, x2_i, y2_i],
-                            margin=0.4,
-                            min_size=args.min_face_size
+                    if should_save and False:
+                        # Save the face
+                        now_jalali = jdatetime.datetime.now()
+                        timestamp = now_jalali.strftime("%Y-%m-%d_%H%M%S_%f")                            
+                        save_path = save_face_image(
+                            face_img, 
+                            save_dir,
+                            timestamp + f"{i}"
                         )
                         
-                        if face_img is not None:
-                            # Save the face
-                            now_jalali = jdatetime.datetime.now()
-                            timestamp = now_jalali.strftime("%Y-%m-%d_%H%M%S_%f")                            
-                            save_path = save_face_image(
-                                face_img, 
-                                save_dir,
-                                timestamp +f"{i}"
-                            )
-                            
-
-
-
-
-
-                            faces = app.get(face_img)
-                            if not faces:
-                                print("No face detected in query image")
-                                return
-
-                            q_emb = faces[0].embedding.astype("float32")
-                            collection_name = "face_embeddings"
-
-                            result = client.query_points(
-                                collection_name=collection_name,
-                                query=q_emb.tolist(),
-                                limit=args.top_k
-                            )
-
-                            matches = []
-                            print("\n" + "=" * 60)
-                            print(f"Query: {args.query_image}")
-                            print("=" * 60)
-                            for idx, pt in enumerate(result.points):
-                                sim = 1 - pt.score
-                                path = pt.payload.get("image_path", "Unknown")
-                                matches.append({"image_path": path, "similarity": sim, "id": pt.id})
-                                print(f"image_path{ path}, similarity{ sim}, id{ pt.id}")
-                                print(f"{idx+1}. {path}  (sim={sim:.3f})")
-                            print("-" * 60)
-
-
-
-
-
-
-
-
-
-
-
-
-
-                            total_faces_saved += 1
-                            # print(f"Saved face {total_faces_saved}: {save_path}")
+                        total_faces_saved += 1
                 
                 # Display count on frame
                 cv2.putText(frame, f"Faces: {dets.shape[0]}", 
-                          (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
-                          1, (0, 255, 255), 2)
+                        (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 
+                        1, (0, 255, 255), 2)
                 cv2.putText(frame, f"Saved: {total_faces_saved}", 
-                          (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 
-                          1, (0, 255, 255), 2)
+                        (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 
+                        1, (0, 255, 255), 2)
                 cv2.putText(frame, f"Frame: {frame_count}", 
-                          (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 
-                          1, (0, 255, 255), 2)
-            
+                        (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 
+                        1, (0, 255, 255), 2)
+
+            cv2.imshow("RetinaFace GPU", frame)
             cv2.imshow("RetinaFace GPU", frame)
             
             key = cv2.waitKey(1) & 0xFF
