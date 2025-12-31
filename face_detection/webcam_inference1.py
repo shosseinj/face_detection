@@ -3,11 +3,13 @@ import argparse
 import numpy as np
 import torch
 import os
-from face_detection.utils import * 
-from model.layers import PriorBox
-from model.config import get_config
-from model.models import RetinaFace
-from model.utils.box_utils import decode, decode_landmarks, nms
+import sys
+from utils.utils import * 
+
+from layers import PriorBox
+from config import get_config
+from models import RetinaFace
+from utils.box_utils import decode, decode_landmarks, nms
 import jdatetime
 
 # ===============================
@@ -16,7 +18,7 @@ import jdatetime
 def parse_arguments():
     parser = argparse.ArgumentParser("RetinaFace GPU Minimal")
 
-    parser.add_argument("--weights", default="./weights/retinaface_mv2.pth")
+    parser.add_argument("--weights", default="./models/weights/retinaface_mv2.pth")
     parser.add_argument("--network", default="mobilenetv2")
     parser.add_argument("--source", default="0")
 
@@ -25,7 +27,7 @@ def parse_arguments():
     parser.add_argument("--fp16", action="store_true")
     
     # Add save directory argument
-    parser.add_argument("--save-dir", default="./detected_faces", 
+    parser.add_argument("--save-dir", default="../images/detected_faces", 
                        help="Directory to save detected faces")
     parser.add_argument("--save-format", default="jpg", choices=["jpg", "png"],
                        help="Image format for saving faces")
