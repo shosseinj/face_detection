@@ -12,7 +12,7 @@ weights/*.ckpt
 *.jpg
 widerface_evaluation
 *.pkl
-
+.venv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

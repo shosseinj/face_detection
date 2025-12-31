@@ -4,10 +4,10 @@ import numpy as np
 import torch
 import os
 from face_detection.utils import * 
-from layers import PriorBox
-from config import get_config
-from models import RetinaFace
-from utils.box_utils import decode, decode_landmarks, nms
+from model.layers import PriorBox
+from model.config import get_config
+from model.models import RetinaFace
+from model.utils.box_utils import decode, decode_landmarks, nms
 import jdatetime
 
 # ===============================
