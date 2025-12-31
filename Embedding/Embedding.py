@@ -12,7 +12,7 @@ from qdrant_client.models import VectorParams, Distance
 # -------------------------
 def parse_args():
     parser = argparse.ArgumentParser("Face Embedding + Qdrant")
-    parser.add_argument("--image-folder", type=str, default="./database/ali/")
+    parser.add_argument("--image-folder", type=str, default="./database/sharifi/")
     parser.add_argument("--query-image", type=str, default=None)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=5)

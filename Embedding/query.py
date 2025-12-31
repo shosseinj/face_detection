@@ -74,7 +74,7 @@ def save_collage(query_img_path, matches, save_path, top_k=5):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--query_image", type=str, default="./database/pouria/p.jpeg")
+    parser.add_argument("--query_image", type=str, default="./database/gg.jpeg")
     parser.add_argument("--top_k", type=int, default=5)
     parser.add_argument("--display", action="store_true", help="Show result window")
     parser.add_argument("--save", type=str, default="", help="Save collage to this file")

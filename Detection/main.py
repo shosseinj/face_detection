@@ -5,7 +5,8 @@ import torch
 import os
 import sys
 from utils.utils import * 
-
+from insightface.app import FaceAnalysis
+from qdrant_client import QdrantClient
 from layers import PriorBox
 from config import get_config
 from models import RetinaFace
@@ -101,6 +102,19 @@ def main(args):
     
     # For tracking to avoid saving duplicates
     last_save_time = {}
+
+
+
+
+    app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+    app.prepare(ctx_id=0, det_size=(640, 640))
+
+    client = QdrantClient(host="localhost", port=6333)
+
+
+
+
+
 
     with torch.no_grad():
         while True:
@@ -206,6 +220,49 @@ def main(args):
                                 timestamp +f"{i}"
                             )
                             
+
+
+
+
+
+                            faces = app.get(face_img)
+                            if not faces:
+                                print("No face detected in query image")
+                                return
+
+                            q_emb = faces[0].embedding.astype("float32")
+                            collection_name = "face_embeddings"
+
+                            result = client.query_points(
+                                collection_name=collection_name,
+                                query=q_emb.tolist(),
+                                limit=args.top_k
+                            )
+
+                            matches = []
+                            print("\n" + "=" * 60)
+                            print(f"Query: {args.query_image}")
+                            print("=" * 60)
+                            for idx, pt in enumerate(result.points):
+                                sim = 1 - pt.score
+                                path = pt.payload.get("image_path", "Unknown")
+                                matches.append({"image_path": path, "similarity": sim, "id": pt.id})
+                                print(f"image_path{ path}, similarity{ sim}, id{ pt.id}")
+                                print(f"{idx+1}. {path}  (sim={sim:.3f})")
+                            print("-" * 60)
+
+
+
+
+
+
+
+
+
+
+
+
+
                             total_faces_saved += 1
                             # print(f"Saved face {total_faces_saved}: {save_path}")
                 
