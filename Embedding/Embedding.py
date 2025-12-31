@@ -12,7 +12,7 @@ from qdrant_client.models import VectorParams, Distance
 # -------------------------
 def parse_args():
     parser = argparse.ArgumentParser("Face Embedding + Qdrant")
-    parser.add_argument("--image-folder", type=str, default="../database/hossein/")
+    parser.add_argument("--image-folder", type=str, default="./database/ali/")
     parser.add_argument("--query-image", type=str, default=None)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=5)
@@ -40,30 +40,33 @@ def main():
 
     COLLECTION = "face_embeddings"
 
-    client.recreate_collection(
-        collection_name=COLLECTION,
-        vectors_config=VectorParams(
-            size=512,
-            distance=Distance.COSINE
+
+
+    if not client.collection_exists(COLLECTION):
+        client.create_collection(
+            collection_name=COLLECTION,
+            vectors_config=VectorParams(
+                size=512,
+                distance=Distance.COSINE
+            )
         )
-    )
+
 
     # -------------------------
     # Insert embeddings
     # -------------------------
+    
+    root_folder = os.path.abspath(os.path.expanduser(args.image_folder))
     for fname in os.listdir(args.image_folder):
-        if not fname.lower().endswith((".jpg", ".png")):
+        if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
             continue
-
-        path = os.path.join(args.image_folder, fname)
-        img = cv2.imread(path)
+        file_path = os.path.join(root_folder, fname)        # <--- full path to image
+        img = cv2.imread(file_path)
         if img is None:
             continue
-
         faces = app.get(img)
         if len(faces) == 0:
             continue
-
         emb = faces[0].embedding.astype("float32")
 
         client.upsert(
@@ -72,38 +75,15 @@ def main():
                 "id": str(uuid.uuid4()),
                 "vector": emb.tolist(),
                 "payload": {
-                    "person": os.path.basename(args.image_folder),
-                    "image": fname
+                    "person": os.path.basename(root_folder),
+                    "image": fname,                    # keep bare name for printout
+                    "image_path": file_path            # <-- real path for cv2.imread
                 }
             }]
         )
-
     print("Embeddings stored in Qdrant")
 
-    # -------------------------
-    # Query
-    # -------------------------
-    if args.query_image:
-        img = cv2.imread(args.query_image)
-        faces = app.get(img)
-
-        if len(faces) == 0:
-            print("No face in query image")
-            return
-
-        q_emb = faces[0].embedding.astype("float32")
-
-        hits = client.search(
-            collection_name=COLLECTION,
-            query_vector=q_emb.tolist(),
-            limit=args.top_k
-        )
-
-        print("\nTop matches:")
-        for h in hits:
-            similarity = 1 - h.score  # cosine distance → similarity
-            print(f"{h.payload['image']} | similarity={similarity:.3f}")
-
+   
 # -------------------------
 if __name__ == "__main__":
     main()

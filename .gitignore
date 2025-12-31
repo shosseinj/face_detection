@@ -17,7 +17,8 @@ widerface_evaluation
 __pycache__/
 *.py[cod]
 *$py.class
-
+*.jpeg
+*/qdrant_storage/*
 # C extensions
 *.so
 *.meta
