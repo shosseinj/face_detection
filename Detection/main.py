@@ -2,7 +2,6 @@ import cv2
 import argparse
 import numpy as np
 import torch
-import os
 from utils.utils import *
 from insightface.app import FaceAnalysis
 from qdrant_client import QdrantClient
@@ -10,26 +9,25 @@ from layers import PriorBox
 from config import get_config
 from models import RetinaFace
 from utils.box_utils import decode, decode_landmarks, nms
+from scipy.spatial.distance import cosine
 
 # ===============================
 # Arguments
 # ===============================
 def parse_arguments():
-    parser = argparse.ArgumentParser("RetinaFace GPU Minimal")
+    parser = argparse.ArgumentParser("RetinaFace GPU Real-Time")
     parser.add_argument("--weights", default="./weights/retinaface_mv2.pth")
     parser.add_argument("--network", default="mobilenetv2")
-    parser.add_argument("--source", default="1")
+    parser.add_argument("--source", default="0")
     parser.add_argument("--conf-threshold", type=float, default=0.5)
     parser.add_argument("--target-size", type=int, default=320)
     parser.add_argument("--fp16", action="store_true")
-    parser.add_argument("--save-dir", default="../images/detected_faces", help="Directory to save detected faces")
-    parser.add_argument("--save-format", default="jpg", choices=["jpg", "png"])
-    parser.add_argument("--save-every-n", type=int, default=8)
+    parser.add_argument("--similarity-threshold", type=float, default=0.4)
     parser.add_argument("--min_face_size", type=int, default=20)
     return parser.parse_args()
 
 # ===============================
-# Check CUDA
+# CUDA check
 # ===============================
 def require_cuda():
     if not torch.cuda.is_available():
@@ -39,7 +37,7 @@ def require_cuda():
     return device
 
 # ===============================
-# Resize for model
+# Resize for RetinaFace
 # ===============================
 def resize_image(frame, size):
     h, w = frame.shape[:2]
@@ -64,33 +62,37 @@ def open_capture(source):
 # ===============================
 def main(args):
     device = require_cuda()
-    save_dir = create_save_directory(args.save_dir)
-    
     cfg = get_config(args.network)
+
+    # -------------------------------
+    # RetinaFace model
+    # -------------------------------
     model = RetinaFace(cfg=cfg).to(device).eval()
     model.load_state_dict(torch.load(args.weights, map_location=device, weights_only=True))
-    
+
     rgb_mean = torch.tensor([104, 117, 123], dtype=torch.float32, device=device).view(1, 1, 3)
+
     cap = open_capture(args.source)
     cv2.namedWindow("RetinaFace GPU", cv2.WINDOW_NORMAL)
-    
-    frame_count = 0
 
     # -------------------------------
-    # InsightFace setup
+    # InsightFace model
     # -------------------------------
-    try:
-        import onnxruntime
-        providers = ["CUDAExecutionProvider"]
-    except:
-        providers = ["CPUExecutionProvider"]
+    app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
+    app.prepare(ctx_id=0, det_size=(640, 640))
 
-    app = FaceAnalysis(name="buffalo_l", providers=providers)
-    app.prepare(ctx_id=0 if "CUDAExecutionProvider" in providers else -1, det_size=(640, 640))
-
-    # Qdrant
+    # -------------------------------
+    # Qdrant client
+    # -------------------------------
     client = QdrantClient(host="localhost", port=6333)
 
+    # -------------------------------
+    # Face cache to skip repeated recognition
+    # -------------------------------
+    face_cache = []  # list of tuples: (embedding, name)
+    update_every = 4  # update recognition every 4 frames
+    tracked_faces = []  # will store {"bbox": [...], "name": ..., "embedding": ...} per face
+    frame_count = 0
     with torch.no_grad():
         while True:
             ret, frame = cap.read()
@@ -141,38 +143,51 @@ def main(args):
                         face_boxes.append([x1_i, y1_i, x2_i, y2_i])
 
                 # -------------------------------
-                # InsightFace embeddings per face
+                # InsightFace per-face inference
                 # -------------------------------
-                for i, face_img in enumerate(face_imgs):
-                    faces_results = app.get(face_img)  # returns a list
+                faces_results = []
+                for face_img in face_imgs:
+                    res = app.get(face_img)  # returns list of 0 or 1 faces
+                    faces_results.append(res[0] if res else None)
+
+                for i, res in enumerate(faces_results):
                     x1_i, y1_i, x2_i, y2_i = face_boxes[i]
                     person_name = "Unknown"
 
-                    if faces_results:
-                        emb = faces_results[0].embedding.astype("float32")
-                        result = client.query_points(collection_name="face_embeddings", query=emb.tolist(), limit=1)
-                        if result.points:
-                            best_match = result.points[0]
-                            sim = 1 - best_match.score
-                            person_name = best_match.payload.get("person", "Unknown")
+                    if res:
+                        emb = res.embedding.astype("float32")
+
+                        # Check cache first
+                        skip_recognition = False
+                        for cached_emb, cached_name in face_cache:
+                            if cosine(emb, cached_emb) < args.similarity_threshold:
+                                person_name = cached_name
+                                skip_recognition = True
+                                break
+
+                        # If not in cache, query Qdrant
+                        if not skip_recognition:
+                            result = client.query_points(collection_name="face_embeddings", query=emb.tolist(), limit=1)
+                            if result.points:
+                                best_match = result.points[0]
+                                person_name = best_match.payload.get("person", "Unknown")
+                            face_cache.append((emb, person_name))
 
                     # Draw
                     cv2.rectangle(frame, (x1_i,y1_i), (x2_i,y2_i), (0,255,0), 2)
                     text_size = cv2.getTextSize(person_name, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-                    cv2.rectangle(frame, (x1_i, y1_i - text_size[1] - 10), 
+                    cv2.rectangle(frame, (x1_i, y1_i - text_size[1] - 10),
                                   (x1_i + text_size[0] + 10, y1_i), (0,255,0), -1)
                     cv2.putText(frame, person_name, (x1_i + 5, y1_i - 5),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0,0,0), 2)
-                    # cv2.putText(frame, f"{dets[i][4]:.2f}", (x1_i, y1_i + 20),
-                    #             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1)
 
                     for j in range(5):
                         cv2.circle(frame, (int(landmarks[i][2*j]), int(landmarks[i][2*j+1])), 2, (0,0,255), -1)
+        
 
-                # Counters
-                # cv2.putText(frame, f"Faces: {len(face_boxes)}", (10,30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255),2)
-                # cv2.putText(frame, f"Frame: {frame_count}", (10,60), cv2.FONT_HERSHEY_SIMPLEX,1,(0,255,255),2)
 
+
+           
             cv2.imshow("RetinaFace GPU", frame)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
@@ -180,6 +195,7 @@ def main(args):
 
     cap.release()
     cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main(parse_arguments())

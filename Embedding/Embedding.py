@@ -12,7 +12,7 @@ from qdrant_client.models import VectorParams, Distance
 # -------------------------
 def parse_args():
     parser = argparse.ArgumentParser("Face Embedding + Qdrant")
-    parser.add_argument("--image-folder", type=str, default="./database/sharifi/")
+    parser.add_argument("--image-folder", type=str, default="./database/FaceDataset")
     parser.add_argument("--query-image", type=str, default=None)
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--top-k", type=int, default=5)
@@ -56,34 +56,52 @@ def main():
     # Insert embeddings
     # -------------------------
     
+    import os
+    import cv2
+    import uuid
+
     root_folder = os.path.abspath(os.path.expanduser(args.image_folder))
-    for fname in os.listdir(args.image_folder):
-        if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
-            continue
-        file_path = os.path.join(root_folder, fname)        # <--- full path to image
-        img = cv2.imread(file_path)
-        if img is None:
-            continue
-        faces = app.get(img)
-        if len(faces) == 0:
-            continue
-        emb = faces[0].embedding.astype("float32")
 
-        client.upsert(
-            collection_name=COLLECTION,
-            points=[{
-                "id": str(uuid.uuid4()),
-                "vector": emb.tolist(),
-                "payload": {
-                    "person": os.path.basename(root_folder),
-                    "image": fname,                    # keep bare name for printout
-                    "image_path": file_path            # <-- real path for cv2.imread
-                }
-            }]
-        )
-    print("Embeddings stored in Qdrant")
+    for person_name in os.listdir(root_folder):
+        person_dir = os.path.join(root_folder, person_name)
 
-   
+        # skip files, only folders
+        if not os.path.isdir(person_dir):
+            continue
+
+        print(f"Processing person: {person_name}")
+
+        for fname in os.listdir(person_dir):
+            if not fname.lower().endswith((".jpg", ".jpeg", ".png")):
+                continue
+
+            file_path = os.path.join(person_dir, fname)
+            img = cv2.imread(file_path)
+
+            if img is None:
+                continue
+
+            faces = app.get(img)
+            if len(faces) == 0:
+                continue
+
+            emb = faces[0].embedding.astype("float32")
+
+            client.upsert(
+                collection_name=COLLECTION,
+                points=[{
+                    "id": str(uuid.uuid4()),
+                    "vector": emb.tolist(),
+                    "payload": {
+                        "person": person_name,   # folder name
+                        "image": fname,
+                        "image_path": file_path
+                    }
+                }]
+            )
+
+    print("✅ Embeddings stored in Qdrant")
+    
 # -------------------------
 if __name__ == "__main__":
     main()
