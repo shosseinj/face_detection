@@ -266,7 +266,11 @@ def main(args):
     prev_landmarks = []
     prev_names = []
     prev_scores = []
-
+    prev_face_count = 0          # <- add this line
+    prev_boxes      = np.empty((0,5), dtype=np.float32)
+    prev_landmarks  = np.empty((0,10), dtype=np.float32)
+    prev_names      = []
+# -------------------
     with torch.no_grad():
         while True:
             ret, frame = cap.read()
@@ -318,7 +322,10 @@ def main(args):
                 # -------------------------------
                 # InsightFace recognition (only every N frames)
                 # -------------------------------
-                if frame_count % update_every == 0:
+                new_face_count = dets.shape[0]
+                face_count_changed = (new_face_count != prev_face_count)
+                prev_face_count = new_face_count
+                if face_count_changed or frame_count % update_every == 0:
                     face_imgs = []
                     for i in range(dets.shape[0]):
                         x1, y1, x2, y2, score = dets[i]
@@ -370,7 +377,11 @@ def main(args):
                 else:
                     # Use previous recognition results
                     current_names = prev_names
-            
+            if scores.numel() == 0:          # nothing detected this frame
+                prev_boxes   = np.empty((0,5), dtype=np.float32)
+                prev_landmarks = np.empty((0,10), dtype=np.float32)
+                prev_names   = []            # clear cached names
+                current_names = []
             # Draw boxes and names for current frame
             for i, (box, score) in enumerate(zip(prev_boxes, prev_scores) if len(prev_boxes) > 0 else []):
                 x1, y1, x2, y2 = box[:4]
