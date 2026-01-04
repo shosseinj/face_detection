@@ -10,7 +10,7 @@ from config import get_config
 from models import RetinaFace
 from utils.box_utils import decode, decode_landmarks, nms
 from scipy.spatial.distance import cosine
-
+from insightface.model_zoo.arcface_onnx import ArcFaceONNX
 # ===============================
 # Arguments
 # ===============================
@@ -24,6 +24,7 @@ import numpy as np
 from scipy.spatial.distance import cdist
 from sklearn.metrics.pairwise import cosine_similarity
 
+from insightface.app.common import Face
 class SimpleFaceTracker:
     def __init__(self, max_age=10, iou_threshold=0.5, cos_threshold=0.6):
         self.faces = {}  # id: {"bbox": [], "name": "", "age": 0, "embedding": None, "confidence": 0}
@@ -238,8 +239,17 @@ def main(args):
     # -------------------------------
     # InsightFace model
     # -------------------------------
-    app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
-    app.prepare(ctx_id=0, det_size=(640, 640))
+    # app = FaceAnalysis(name="buffalo_l", providers=["CUDAExecutionProvider"])
+    # app.prepare(ctx_id=0, det_size=(640, 640))
+
+
+    app = ArcFaceONNX(
+    model_file=os.path.expanduser(
+        "~/.insightface/models/buffalo_l/w600k_r50.onnx"
+    )
+)
+    
+    app.prepare(ctx_id=0)
 
     # -------------------------------
     # Qdrant client
@@ -270,6 +280,8 @@ def main(args):
     prev_boxes      = np.empty((0,5), dtype=np.float32)
     prev_landmarks  = np.empty((0,10), dtype=np.float32)
     prev_names      = []
+    detect_every = 3
+    scores= []
 # -------------------
     with torch.no_grad():
         while True:
@@ -305,9 +317,12 @@ def main(args):
             landmarks = landmarks[keep]
             scores = scores[keep]
 
-            current_names = ["Unknown"] * len(boxes) if scores.numel() > 0 else []
-            
-            if scores.numel() > 0:
+
+
+
+            current_names = ["Unknown"] * len(boxes) 
+                #    if scores.numel() > 0:
+            if True:
                 dets = torch.cat([boxes, scores.unsqueeze(1)], dim=1)
                 keep = nms(dets.cpu().numpy(), 0.4)
                 dets = dets[keep].cpu().numpy()
@@ -337,8 +352,14 @@ def main(args):
                     faces_results = []
                     for face_img in face_imgs:
                         if face_img is not None:
-                            res = app.get(face_img)
-                            faces_results.append(res[0] if res else None)
+                            dummy_face = Face(bbox=boxes_np[i], kps=landmarks[i], det_score=scores[i])
+                            # Get embedding
+                            lmk_5 = landmarks[i].reshape((5,2))
+                            dummy_face.kps = lmk_5
+                            res = app.get(face_img, dummy_face)
+                            print(res)
+                     
+                            faces_results.append(res)
                         else:
                             faces_results.append(None)
                     
@@ -377,11 +398,11 @@ def main(args):
                 else:
                     # Use previous recognition results
                     current_names = prev_names
-            if scores.numel() == 0:          # nothing detected this frame
-                prev_boxes   = np.empty((0,5), dtype=np.float32)
-                prev_landmarks = np.empty((0,10), dtype=np.float32)
-                prev_names   = []            # clear cached names
-                current_names = []
+            # if scores.numel() == 0:          # nothing detected this frame
+            #     prev_boxes   = np.empty((0,5), dtype=np.float32)
+            #     prev_landmarks = np.empty((0,10), dtype=np.float32)
+            #     prev_names   = []            # clear cached names
+            #     current_names = []
             # Draw boxes and names for current frame
             for i, (box, score) in enumerate(zip(prev_boxes, prev_scores) if len(prev_boxes) > 0 else []):
                 x1, y1, x2, y2 = box[:4]
@@ -418,176 +439,6 @@ def main(args):
                 break
    
    
-   
-    # Initialize at the beginning (after your other initializations)
-    # tracker = SimpleFaceTracker(max_age=15, iou_threshold=0.3)
-
-    # # Replace your current main loop with this:
-    # with torch.no_grad():
-    #     while True:
-    #         ret, frame = cap.read()
-    #         if not ret:
-    #             break
-            
-    #         frame_count += 1
-    #         original_frame = frame.copy()
-            
-    #         # -------------------------------
-    #         # RetinaFace detection (every frame)
-    #         # -------------------------------
-    #         model_img, scale = resize_image(frame, args.target_size)
-    #         h, w = model_img.shape[:2]
-
-    #         img = torch.from_numpy(model_img.astype(np.float32)).to(device)
-    #         img = img - rgb_mean
-    #         img = img.permute(2, 0, 1).unsqueeze(0)
-    #         if args.fp16:
-    #             img = img.half()
-
-    #         with torch.amp.autocast(device_type='cuda', enabled=args.fp16):
-    #             loc, conf, landmarks = model(img)
-
-    #         priors = PriorBox(cfg, image_size=(w, h)).generate_anchors().to(device)
-    #         boxes = decode(loc.squeeze(0), priors, cfg["variance"]) * torch.tensor([w,h,w,h], device=device) / scale
-    #         landmarks = decode_landmarks(landmarks.squeeze(0), priors, cfg["variance"]) * torch.tensor([w,h]*5, device=device) / scale
-    #         scores = conf.squeeze(0)[:,1]
-
-    #         keep = scores > args.conf_threshold
-    #         boxes = boxes[keep]
-    #         landmarks = landmarks[keep]
-    #         scores = scores[keep]
-
-    #         current_names = ["Unknown"] * len(boxes) if scores.numel() > 0 else []
-    #         current_embeddings = [None] * len(boxes) if scores.numel() > 0 else []
-            
-    #         if scores.numel() > 0:
-    #             dets = torch.cat([boxes, scores.unsqueeze(1)], dim=1)
-    #             keep = nms(dets.cpu().numpy(), 0.4)
-    #             dets = dets[keep].cpu().numpy()
-    #             landmarks = landmarks[keep].cpu().numpy()
-    #             boxes_np = boxes[keep].cpu().numpy()
-    #             scores_np = scores[keep].cpu().numpy()
-
-    #             # -------------------------------
-    #             # InsightFace recognition (only every N frames)
-    #             # -------------------------------
-    #             if frame_count % update_every == 0:
-    #                 face_imgs = []
-    #                 face_indices = []
-                    
-    #                 # Prepare face images for recognition
-    #                 for i in range(dets.shape[0]):
-    #                     x1, y1, x2, y2, score = dets[i]
-    #                     x1_i, y1_i, x2_i, y2_i = int(x1), int(y1), int(x2), int(y2)
-    #                     face_img = extract_face(original_frame, [x1_i, y1_i, x2_i, y2_i], margin=0.4, min_size=args.min_face_size)
-    #                     if face_img is not None:
-    #                         face_imgs.append(face_img)
-    #                         face_indices.append(i)
-                    
-    #                 # Batch process faces
-    #                 faces_results = []
-    #                 for face_img in face_imgs:
-    #                     res = app.get(face_img)
-    #                     faces_results.append(res[0] if res else None)
-                    
-    #                 # Update names based on recognition
-    #                 for idx, (result_idx, res) in enumerate(zip(face_indices, faces_results)):
-    #                     if res:
-    #                         emb = res.embedding.astype("float32")
-                            
-    #                         # Check cache first
-    #                         skip_recognition = False
-    #                         for cached_emb, cached_name in face_cache:
-    #                             if cosine(emb, cached_emb) < args.similarity_threshold:
-    #                                 current_names[result_idx] = cached_name
-    #                                 current_embeddings[result_idx] = emb
-    #                                 skip_recognition = True
-    #                                 break
-                            
-    #                         # If not in cache, query Qdrant
-    #                         if not skip_recognition:
-    #                             try:
-    #                                 result = client.query_points(
-    #                                     collection_name="face_embeddings", 
-    #                                     query=emb.tolist(), 
-    #                                     limit=1
-    #                                 )
-    #                                 if result.points:
-    #                                     best_match = result.points[0]
-    #                                     current_names[result_idx] = best_match.payload.get("person", "Unknown")
-    #                                 else:
-    #                                     current_names[result_idx] = "Unknown"
-                                    
-    #                                 face_cache.append((emb, current_names[result_idx]))
-    #                                 current_embeddings[result_idx] = emb
-    #                             except Exception as e:
-    #                                 print(f"Qdrant error: {e}")
-    #                                 current_names[result_idx] = "Unknown"
-    #                     else:
-    #                         current_names[result_idx] = "Unknown"
-                
-    #             # Prepare detections for tracker
-    #             detections_list = []
-    #             names_list = []
-    #             embeddings_list = []
-                
-    #             for i in range(dets.shape[0]):
-    #                 x1, y1, x2, y2, score = dets[i]
-    #                 detections_list.append([int(x1), int(y1), int(x2), int(y2)])
-    #                 names_list.append(current_names[i] if i < len(current_names) else "Unknown")
-    #                 embeddings_list.append(current_embeddings[i] if i < len(current_embeddings) else None)
-                
-    #             # Update tracker
-    #             tracked_faces = tracker.update(
-    #                 detections=detections_list,
-    #                 names=names_list,
-    #                 embeddings=embeddings_list,
-    #                 scores=scores_np.tolist()
-    #             )
-            
-    #         else:
-    #             # No detections, just update tracker (ages faces)
-    #             tracked_faces = tracker.update(detections=[])
-            
-    #         # Draw tracked faces
-    #         for face_id, face in tracked_faces.items():
-    #             x1, y1, x2, y2 = face["bbox"]
-    #             name = face.get("name", "Unknown")
-    #             confidence = face.get("confidence", 0.5)
-                
-    #             # Draw bounding box with color based on age
-    #             age = face.get("age", 0)
-    #             if age < 5:
-    #                 color = (0, 255, 0)  # Green for fresh tracks
-    #             elif age < 10:
-    #                 color = (0, 255, 255)  # Yellow for medium age
-    #             else:
-    #                 color = (0, 165, 255)  # Orange for old tracks
-                
-    #             cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
-                
-    #             # Draw ID and name
-    #             label = f"ID:{face_id} {name}"
-    #             if frame_count % update_every == 0:  # Show confidence only on recognition frames
-    #                 label += f" ({confidence:.2f})"
-                
-    #             text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)[0]
-    #             cv2.rectangle(frame, (int(x1), int(y1) - text_size[1] - 10),
-    #                         (int(x1) + text_size[0] + 10, int(y1)), color, -1)
-    #             cv2.putText(frame, label, (int(x1) + 5, int(y1) - 5),
-    #                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-            
-    #         # Show FPS and stats
-    #         cv2.putText(frame, f"Frame: {frame_count}", (10, 30),
-    #                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    #         cv2.putText(frame, f"Active faces: {len(tracked_faces)}", (10, 60),
-    #                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-            
-    #         cv2.imshow("RetinaFace GPU + Tracker", frame)
-    #         key = cv2.waitKey(1) & 0xFF
-    #         if key == ord("q"):
-    #             break
-
     cap.release()
     cv2.destroyAllWindows()
 
