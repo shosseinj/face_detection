@@ -176,7 +176,7 @@ def recognize_face(embedding, client, args):
         if hasattr(best_match, 'score'):
             score = best_match.score
 
-    if score < 0.4:
+    if score < 0.3:
         person = "Unknown"
         # score = 0.0
     return person, score
