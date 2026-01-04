@@ -5,6 +5,6 @@
 
 
 
-
+'python webcam_retina_arcface.py --camera 0 --collection n3 --threshold 0.5' 
 
 
