@@ -5,9 +5,9 @@
             "name": "Python Debugger: Current File",
             "type": "debugpy",
             "request": "launch",
-            // "program": "${workspaceFolder}/Embedding/Embedding.py",
-            "program": "${workspaceFolder}/Detection/main.py",
-            "cwd": "${workspaceFolder}/Detection/",
+            "program": "${workspaceFolder}/Embedding/Embedding.py",
+            // "program": "${workspaceFolder}/Detection/main.py",
+            "cwd": "${workspaceFolder}/Embedding/",
             "console": "integratedTerminal"
         }
     ]
