@@ -14,25 +14,207 @@ def parse_args():
     parser.add_argument("--camera", type=int, default=0, help="Camera device index")
     return parser.parse_args()
 
+
+def resize_frame(frame, target_width=2048):
+    """Resize frame for display while maintaining aspect ratio"""
+    if frame is None:
+        return None
+    
+    height, width = frame.shape[:2]
+    
+    # Calculate new dimensions while maintaining aspect ratio
+    aspect_ratio = height / width
+    new_height = int(target_width * aspect_ratio)
+    
+    # Resize
+    resized = cv2.resize(frame, (target_width, new_height))
+    return resized
+
+
+# def open_capture(camera_id):
+
+#     rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
+#     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+#     # cap = cv2.VideoCapture(camera_id)
+#     if not cap.isOpened():
+#         raise RuntimeError(f"Cannot open camera {camera_id}")
+#     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+#     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+#     # cap.set(cv2.CAP_PROP_FPS, 30)
+    
+
+#     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+#     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+#     cap.set(cv2.CAP_PROP_FPS, 5)
+#     return cap
+
+
+# def open_capture(camera_id):
+#     # Change channel number or try different stream format
+#     # Channel 301 might be HEVC, try channel 101 for H.264
+#     rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
+#     # Or try substream (usually H.264)
+#     # rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/102/"
+    
+#     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    
+#     # Try different backend if FFMPEG has issues
+#     # cap = cv2.VideoCapture(rtsp_url, cv2.CAP_GSTREAMER)
+    
+#     if not cap.isOpened():
+#         # Fallback to RTSP without specific channel
+#         rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554"
+#         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    
+#     if not cap.isOpened():
+#         raise RuntimeError(f"Cannot open camera {camera_id}")
+    
+#     return cap
+
+
+# Install: pip install hikvisionapi
+from hikvisionapi import Client
+
+
+from hikvisionapi import Client
+
+
+# def open_capture(camera_id):
+#     rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
+    
+#     # Add FFMPEG parameters for lower latency
+#     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    
+#     # Set buffer size and latency options
+#     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimum
+#     cap.set(cv2.CAP_PROP_FPS, 15)  # Limit FPS
+    
+#     if not cap.isOpened():
+#         raise RuntimeError(f"Cannot open camera {camera_id}")
+    
+#     return cap
+
+
+from hikvisionapi import Client
+
 def open_capture(camera_id):
-
-    rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
-    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    # cap = cv2.VideoCapture(camera_id)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open camera {camera_id}")
+    # Hikvision SDK typically uses port 8000
+    port = 8000
     
-    # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-    # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-    # cap.set(cv2.CAP_PROP_FPS, 30)
+    try:
+        print(f"Connecting to Hikvision SDK on port {port}...")
+        
+        # Create SDK client
+        cam = Client(f'http://192.168.110.20:{port}', 'Jafari', 'Asd12345', timeout=10)
+        
+        # Test connection
+        device_info = cam.System.deviceInfo(method='get')
+        print(f"Connected! Device: {device_info.get('deviceName', 'Unknown')}")
+        
+        # Get channel information for channel 3
+        try:
+            # First, check what channels are available
+            channels_info = cam.Streaming.channels(method='get')
+            print(f"Total channels available: {len(channels_info)}")
+            
+            # Channel indexing usually starts from 1
+            # Channel 3 typically corresponds to:
+            # - Main stream: 301 or 103 depending on camera model
+            # - Sub stream: 302 or 203
+            
+            # Try different channel mappings for channel 3
+            channel_mappings = [
+                '301',  # Most common: Channel 3, Main stream
+                '302',  # Channel 3, Sub stream
+                '103',  # Alternative: Channel 1, Stream 3
+                '203',  # Channel 2, Stream 3
+                '303',  # Channel 3, Stream 3
+                '3',    # Simple channel 3
+                3,      # Integer channel 3
+            ]
+            
+            # Method 1: Try ISAPI streaming URL (most reliable)
+            for channel in channel_mappings:
+                try:
+                    print(f"Trying channel {channel}...")
+                    
+                    # Get RTSP URL via ISAPI
+                    stream_config = cam.Streaming.channels[channel](method='get')
+                    
+                    if 'Video' in stream_config:
+                        print(f"Channel {channel} config: {stream_config}")
+                        
+                        # Construct RTSP URL for channel 3
+                        # Format: rtsp://username:password@ip:port/Streaming/Channels/301
+                        stream_url = f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/{channel}"
+                        
+                        # Try to open the stream
+                        cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+                        if cap.isOpened():
+                            print(f"✓ Successfully connected to channel {channel}")
+                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                            return cap
+                        else:
+                            print(f"  Could not open stream for channel {channel}")
+                            
+                except Exception as e:
+                    print(f"  Channel {channel} failed: {str(e)[:50]}")
+                    continue
+            
+            # Method 2: Direct SDK capture (if RTSP fails)
+            print("Trying direct SDK capture...")
+            
+            # Hikvision SDK direct preview URL
+            sdk_urls = [
+                f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301?transportmode=unicast",
+                f"rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
+                f"rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
+                f"rtsp://Jafari:Asd12345@192.168.110.20:554/3",
+            ]
+            
+            for sdk_url in sdk_urls:
+                try:
+                    cap = cv2.VideoCapture(sdk_url, cv2.CAP_FFMPEG)
+                    if cap.isOpened():
+                        print(f"✓ Connected via SDK URL: {sdk_url}")
+                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        cap.set(cv2.CAP_PROP_FPS, 15)
+                        return cap
+                except:
+                    continue
+                    
+        except Exception as e:
+            print(f"Channel configuration error: {e}")
+            
+    except Exception as e:
+        print(f"Hikvision SDK connection failed: {e}")
     
+    # Fallback to direct RTSP if SDK fails
+    print("Falling back to direct RTSP connection...")
+    
+    # Direct RTSP URLs for channel 3
+    rtsp_urls = [
+        "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301",
+        "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302",
+        "rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
+        "rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
+        "rtsp://Jafari:Asd12345@192.168.110.20:554/onvif1",
+    ]
+    
+    for url in rtsp_urls:
+        try:
+            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            if cap.isOpened():
+                print(f"✓ Connected via direct RTSP: {url}")
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_FPS, 15)
+                return cap
+        except:
+            continue
+    
+    raise RuntimeError(f"Cannot connect to camera channel 3")
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 15)
 
-
-    return cap
 
 def load_models(args):
     """Load RetinaFace and ArcFace ONNX models"""
@@ -254,8 +436,13 @@ def main():
             print("Failed to grab frame")
             break
         
-        frame = cv2.flip(frame, 1)
+        # frame = cv2.flip(frame, 1)
+        frame = resize_frame(frame)
+        cv2.imshow('Real-time Face Recognition (RetinaFace+ArcFace)', frame)
         
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+        continue
         # Detect faces with RetinaFace
         faces = detect_faces_retinaface(det_session, frame, args.threshold)
         
