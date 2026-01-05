@@ -31,45 +31,7 @@ def resize_frame(frame, target_width=2048):
     return resized
 
 
-# def open_capture(camera_id):
 
-#     rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
-#     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-#     # cap = cv2.VideoCapture(camera_id)
-#     if not cap.isOpened():
-#         raise RuntimeError(f"Cannot open camera {camera_id}")
-#     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-#     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-#     # cap.set(cv2.CAP_PROP_FPS, 30)
-    
-
-#     # cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-#     # cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-#     cap.set(cv2.CAP_PROP_FPS, 5)
-#     return cap
-
-
-# def open_capture(camera_id):
-#     # Change channel number or try different stream format
-#     # Channel 301 might be HEVC, try channel 101 for H.264
-#     rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
-#     # Or try substream (usually H.264)
-#     # rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/102/"
-    
-#     cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    
-#     # Try different backend if FFMPEG has issues
-#     # cap = cv2.VideoCapture(rtsp_url, cv2.CAP_GSTREAMER)
-    
-#     if not cap.isOpened():
-#         # Fallback to RTSP without specific channel
-#         rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554"
-#         cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
-    
-#     if not cap.isOpened():
-#         raise RuntimeError(f"Cannot open camera {camera_id}")
-    
-#     return cap
 
 
 # Install: pip install hikvisionapi
@@ -97,123 +59,551 @@ from hikvisionapi import Client
 
 from hikvisionapi import Client
 
-def open_capture(camera_id):
-    # Hikvision SDK typically uses port 8000
-    port = 8000
+# def open_capture(camera_id):
+#     # Hikvision SDK typically uses port 8000
+#     port = 8000
     
-    try:
-        print(f"Connecting to Hikvision SDK on port {port}...")
+#     try:
+#         print(f"Connecting to Hikvision SDK on port {port}...")
         
-        # Create SDK client
-        cam = Client(f'http://192.168.110.20:{port}', 'Jafari', 'Asd12345', timeout=10)
+#         # Create SDK client
+#         cam = Client(f'http://192.168.110.20:{port}', 'Jafari', 'Asd12345', timeout=10)
         
-        # Test connection
-        device_info = cam.System.deviceInfo(method='get')
-        print(f"Connected! Device: {device_info.get('deviceName', 'Unknown')}")
+#         # Test connection
+#         device_info = cam.System.deviceInfo(method='get')
+#         print(f"Connected! Device: {device_info.get('deviceName', 'Unknown')}")
         
-        # Get channel information for channel 3
-        try:
-            # First, check what channels are available
-            channels_info = cam.Streaming.channels(method='get')
-            print(f"Total channels available: {len(channels_info)}")
+#         # Get channel information for channel 3
+#         try:
+#             # First, check what channels are available
+#             channels_info = cam.Streaming.channels(method='get')
+#             print(f"Total channels available: {len(channels_info)}")
             
-            # Channel indexing usually starts from 1
-            # Channel 3 typically corresponds to:
-            # - Main stream: 301 or 103 depending on camera model
-            # - Sub stream: 302 or 203
+#             # Channel indexing usually starts from 1
+#             # Channel 3 typically corresponds to:
+#             # - Main stream: 301 or 103 depending on camera model
+#             # - Sub stream: 302 or 203
             
-            # Try different channel mappings for channel 3
-            channel_mappings = [
-                '301',  # Most common: Channel 3, Main stream
-                '302',  # Channel 3, Sub stream
-                '103',  # Alternative: Channel 1, Stream 3
-                '203',  # Channel 2, Stream 3
-                '303',  # Channel 3, Stream 3
-                '3',    # Simple channel 3
-                3,      # Integer channel 3
-            ]
+#             # Try different channel mappings for channel 3
+#             channel_mappings = [
+#                 '301',  # Most common: Channel 3, Main stream
+#                 '302',  # Channel 3, Sub stream
+#                 '103',  # Alternative: Channel 1, Stream 3
+#                 '203',  # Channel 2, Stream 3
+#                 '303',  # Channel 3, Stream 3
+#                 '3',    # Simple channel 3
+#                 3,      # Integer channel 3
+#             ]
             
-            # Method 1: Try ISAPI streaming URL (most reliable)
-            for channel in channel_mappings:
-                try:
-                    print(f"Trying channel {channel}...")
+#             # Method 1: Try ISAPI streaming URL (most reliable)
+#             for channel in channel_mappings:
+#                 try:
+#                     print(f"Trying channel {channel}...")
                     
-                    # Get RTSP URL via ISAPI
-                    stream_config = cam.Streaming.channels[channel](method='get')
+#                     # Get RTSP URL via ISAPI
+#                     stream_config = cam.Streaming.channels[channel](method='get')
                     
-                    if 'Video' in stream_config:
-                        print(f"Channel {channel} config: {stream_config}")
+#                     if 'Video' in stream_config:
+#                         print(f"Channel {channel} config: {stream_config}")
                         
-                        # Construct RTSP URL for channel 3
-                        # Format: rtsp://username:password@ip:port/Streaming/Channels/301
-                        stream_url = f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/{channel}"
+#                         # Construct RTSP URL for channel 3
+#                         # Format: rtsp://username:password@ip:port/Streaming/Channels/301
+#                         stream_url = f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/{channel}"
                         
-                        # Try to open the stream
-                        cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
-                        if cap.isOpened():
-                            print(f"✓ Successfully connected to channel {channel}")
-                            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                            return cap
-                        else:
-                            print(f"  Could not open stream for channel {channel}")
+#                         # Try to open the stream
+#                         cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+#                         if cap.isOpened():
+#                             print(f"✓ Successfully connected to channel {channel}")
+#                             cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+#                             return cap
+#                         else:
+#                             print(f"  Could not open stream for channel {channel}")
                             
-                except Exception as e:
-                    print(f"  Channel {channel} failed: {str(e)[:50]}")
-                    continue
+#                 except Exception as e:
+#                     print(f"  Channel {channel} failed: {str(e)[:50]}")
+#                     continue
             
-            # Method 2: Direct SDK capture (if RTSP fails)
-            print("Trying direct SDK capture...")
+#             # Method 2: Direct SDK capture (if RTSP fails)
+#             print("Trying direct SDK capture...")
             
-            # Hikvision SDK direct preview URL
-            sdk_urls = [
-                f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301?transportmode=unicast",
-                f"rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
-                f"rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
-                f"rtsp://Jafari:Asd12345@192.168.110.20:554/3",
-            ]
+#             # Hikvision SDK direct preview URL
+#             sdk_urls = [
+#                 f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301?transportmode=unicast",
+#                 f"rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
+#                 f"rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
+#                 f"rtsp://Jafari:Asd12345@192.168.110.20:554/3",
+#             ]
             
-            for sdk_url in sdk_urls:
-                try:
-                    cap = cv2.VideoCapture(sdk_url, cv2.CAP_FFMPEG)
-                    if cap.isOpened():
-                        print(f"✓ Connected via SDK URL: {sdk_url}")
-                        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                        cap.set(cv2.CAP_PROP_FPS, 15)
-                        return cap
-                except:
-                    continue
+#             for sdk_url in sdk_urls:
+#                 try:
+#                     cap = cv2.VideoCapture(sdk_url, cv2.CAP_FFMPEG)
+#                     if cap.isOpened():
+#                         print(f"✓ Connected via SDK URL: {sdk_url}")
+#                         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+#                         cap.set(cv2.CAP_PROP_FPS, 15)
+#                         return cap
+#                 except:
+#                     continue
                     
-        except Exception as e:
-            print(f"Channel configuration error: {e}")
+#         except Exception as e:
+#             print(f"Channel configuration error: {e}")
             
+#     except Exception as e:
+#         print(f"Hikvision SDK connection failed: {e}")
+    
+#     # Fallback to direct RTSP if SDK fails
+#     print("Falling back to direct RTSP connection...")
+    
+#     # Direct RTSP URLs for channel 3
+#     rtsp_urls = [
+#         "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301",
+#         "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302",
+#         "rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
+#         "rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
+#         "rtsp://Jafari:Asd12345@192.168.110.20:554/onvif1",
+#     ]
+    
+#     for url in rtsp_urls:
+#         try:
+#             cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+#             if cap.isOpened():
+#                 print(f"✓ Connected via direct RTSP: {url}")
+#                 cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+#                 cap.set(cv2.CAP_PROP_FPS, 15)
+#                 return cap
+#         except:
+#             continue
+    
+#     raise RuntimeError(f"Cannot connect to camera channel 3")
+# def open_capture(camera_id):
+#     # Hikvision SDK uses different ports:
+#     # - 8000: Main SDK port
+#     # - 80: HTTP/ISAPI port  
+#     # - 443: HTTPS/ISAPI port
+#     # - 554: RTSP port
+#     # - 65001: Sometimes used for SDK
+    
+#     sdk_ports = [8000, 80, 443, 65001, 65002]
+    
+#     for port in sdk_ports:
+#         try:
+#             print(f"Trying Hikvision SDK on port {port}...")
+            
+#             # Create client with explicit protocol
+#             if port in [443, 8443]:
+#                 base_url = f'https://192.168.110.20:{port}'
+#             else:
+#                 base_url = f'http://192.168.110.20:{port}'
+            
+#             cam = Client(base_url, 'Jafari', 'Asd12345', timeout=5)
+            
+#             # Test with a simple request
+#             try:
+#                 # Try ISAPI first
+#                 system_info = cam.System.deviceInfo(method='get')
+#                 print(f"✓ SDK connected on port {port}")
+#                 print(f"  Device: {system_info.get('deviceName', 'Unknown')}")
+                
+#                 # Now get the low-latency SDK stream
+#                 return get_sdk_stream(cam, port)
+                
+#             except Exception as e:
+#                 print(f"  ISAPI failed: {e}")
+#                 continue
+                
+#         except Exception as e:
+#             print(f"  Port {port} failed: {e}")
+#             continue
+    
+#     print("SDK connection failed, falling back to optimized RTSP...")
+#     return get_optimized_rtsp()
+
+
+
+import threading
+import queue
+
+import websocket  # This is websocket-client
+import json
+import threading
+import queue
+import numpy as np
+import cv2
+
+class WebSocketCamera:
+    """WebSocket connection for Hikvision DVR"""
+    
+    def __init__(self, channel=301):
+        self.channel = channel
+        self.frame_queue = queue.Queue(maxsize=1)  # Keep only latest frame
+        self.running = False
+        self.ws = None
+        self.thread = None
+        
+    def start(self):
+        """Start WebSocket connection"""
+        self.running = True
+        self.thread = threading.Thread(target=self._websocket_thread, daemon=True)
+        self.thread.start()
+        # Wait a bit for connection
+        import time
+        time.sleep(1)
+        
+    def _websocket_thread(self):
+        """Background thread for WebSocket connection"""
+        
+        # Hikvision WebSocket URL format
+        # Try different ports and paths
+        ws_urls = [
+            f"ws://192.168.110.20:8000/ISAPI/Streaming/channels/{self.channel}/websocket",
+            f"ws://192.168.110.20:8000/websocket",
+            f"ws://192.168.110.20:80/ISAPI/Streaming/channels/{self.channel}/websocket",
+            f"ws://192.168.110.20/ISAPI/Streaming/channels/{self.channel}/websocket",
+        ]
+        
+        for ws_url in ws_urls:
+            try:
+                print(f"Trying WebSocket: {ws_url}")
+                
+                # Create WebSocket connection with timeout
+                self.ws = websocket.WebSocket()
+                self.ws.connect(ws_url, timeout=5)
+                
+                # Send authentication (Hikvision format)
+                auth_message = json.dumps({
+                    "method": "login",
+                    "params": {
+                        "userName": "Jafari",
+                        "password": "Asd12345",
+                        "channel": self.channel
+                    },
+                    "id": 1
+                })
+                
+                self.ws.send(auth_message)
+                auth_response = self.ws.recv()
+                print(f"Auth response: {auth_response}")
+                
+                # Start video stream
+                stream_message = json.dumps({
+                    "method": "startVideo",
+                    "params": {
+                        "channel": self.channel,
+                        "streamType": "subStream",  # or "mainStream"
+                        "protocol": "h264"
+                    },
+                    "id": 2
+                })
+                
+                self.ws.send(stream_message)
+                stream_response = self.ws.recv()
+                print(f"Stream response: {stream_response}")
+                
+                print(f"✓ WebSocket connected to {ws_url}")
+                
+                # Start receiving frames
+                self._receive_frames()
+                break
+                
+            except Exception as e:
+                print(f"WebSocket failed {ws_url}: {e}")
+                if self.ws:
+                    self.ws.close()
+                continue
+        
+        self.running = False
+        
+    def _receive_frames(self):
+        """Receive and decode frames"""
+        frame_buffer = bytearray()
+        
+        while self.running and self.ws:
+            try:
+                # Receive data (could be text or binary)
+                data = self.ws.recv()
+                
+                if isinstance(data, bytes):
+                    # Binary video data
+                    frame_buffer.extend(data)
+                    
+                    # Try to find JPEG/H.264 frame boundaries
+                    # Simple approach: look for JPEG markers
+                    if b'\xff\xd8' in frame_buffer and b'\xff\xd9' in frame_buffer:
+                        start = frame_buffer.find(b'\xff\xd8')
+                        end = frame_buffer.find(b'\xff\xd9') + 2
+                        
+                        if start < end:
+                            jpeg_data = bytes(frame_buffer[start:end])
+                            
+                            # Decode JPEG to OpenCV frame
+                            nparr = np.frombuffer(jpeg_data, np.uint8)
+                            frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                            
+                            if frame is not None:
+                                # Put in queue (replace if full)
+                                if self.frame_queue.full():
+                                    try:
+                                        self.frame_queue.get_nowait()
+                                    except:
+                                        pass
+                                self.frame_queue.put(frame)
+                            
+                            # Clear buffer
+                            frame_buffer = frame_buffer[end:]
+                            
+                elif isinstance(data, str):
+                    # Text message (keepalive, status, etc.)
+                    try:
+                        msg = json.loads(data)
+                        if 'method' in msg and msg['method'] == 'keepalive':
+                            # Send keepalive response
+                            response = json.dumps({
+                                "result": "ok",
+                                "id": msg.get('id', 0)
+                            })
+                            self.ws.send(response)
+                    except:
+                        pass
+                        
+            except Exception as e:
+                print(f"WebSocket receive error: {e}")
+                break
+    
+    def read(self):
+        """Get latest frame"""
+        if not self.running:
+            self.start()
+            
+        try:
+            frame = self.frame_queue.get(timeout=0.05)
+            return True, frame
+        except:
+            return False, None
+    
+    def isOpened(self):
+        return self.running and self.ws is not None
+    
+    def release(self):
+        """Close connection"""
+        self.running = False
+        if self.ws:
+            try:
+                self.ws.close()
+            except:
+                pass
+        if self.thread:
+            self.thread.join(timeout=1)
+
+def open_capture(camera_id):
+    """Main function to open camera connection"""
+    
+    print("Opening WebSocket connection to DVR...")
+    
+    # Try WebSocket first
+    try:
+        # Test if WebSocket is available
+        import websocket
+        test_ws = websocket.WebSocket()
+        test_ws.connect("ws://192.168.110.20:8000", timeout=2)
+        test_ws.close()
+        print("✓ WebSocket port 8000 is open")
+        
     except Exception as e:
-        print(f"Hikvision SDK connection failed: {e}")
+        print(f"WebSocket test failed: {e}")
+        return open_http_fallback()
     
-    # Fallback to direct RTSP if SDK fails
-    print("Falling back to direct RTSP connection...")
+    # Create WebSocket camera for channel 3
+    ws_camera = WebSocketCamera(channel=301)  # Channel 3, main stream
     
-    # Direct RTSP URLs for channel 3
-    rtsp_urls = [
-        "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301",
-        "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302",
-        "rtsp://Jafari:Asd12345@192.168.110.20:554/ISAPI/Streaming/channels/301",
-        "rtsp://Jafari:Asd12345@192.168.110.20:554/h264/ch3/main/av_stream",
-        "rtsp://Jafari:Asd12345@192.168.110.20:554/onvif1",
+    # Start connection
+    ws_camera.start()
+    
+    # Wait a bit and check if connected
+    import time
+    time.sleep(2)
+    
+    if not ws_camera.isOpened():
+        print("WebSocket connection failed, falling back to HTTP")
+        return open_http_fallback()
+    
+    print("✓ WebSocket camera connected successfully")
+    
+    # Create wrapper that mimics cv2.VideoCapture
+    class WebSocketCapture:
+        def __init__(self, ws_cam):
+            self.ws_cam = ws_cam
+            
+        def read(self):
+            return self.ws_cam.read()
+            
+        def isOpened(self):
+            return self.ws_cam.isOpened()
+            
+        def release(self):
+            self.ws_cam.release()
+            
+        def set(self, prop, value):
+            # WebSocket doesn't support property setting
+            return True
+            
+        def get(self, prop):
+            # Return default values
+            if prop == cv2.CAP_PROP_FPS:
+                return 30
+            elif prop == cv2.CAP_PROP_FRAME_WIDTH:
+                return 1920
+            elif prop == cv2.CAP_PROP_FRAME_HEIGHT:
+                return 1080
+            return 0
+    
+    return WebSocketCapture(ws_camera)
+
+def open_http_fallback():
+    """Fallback to HTTP/MJPEG"""
+    
+    print("Trying HTTP/MJPEG fallback...")
+    
+    # Common Hikvision HTTP URLs
+    http_urls = [
+        "http://Jafari:Asd12345@192.168.110.20/ISAPI/Streaming/channels/301/httpPreview",
+        "http://192.168.110.20/cgi-bin/mjpg/video.cgi?channel=3&subtype=0",
+        "http://Jafari:Asd12345@192.168.110.20/Streaming/channels/301/picture",
     ]
     
-    for url in rtsp_urls:
+    for url in http_urls:
         try:
-            cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+            print(f"Trying HTTP: {url}")
+            cap = cv2.VideoCapture(url)
+            
             if cap.isOpened():
-                print(f"✓ Connected via direct RTSP: {url}")
-                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                cap.set(cv2.CAP_PROP_FPS, 15)
-                return cap
-        except:
+                # Test read
+                ret, frame = cap.read()
+                if ret and frame is not None:
+                    print(f"✓ HTTP connected: {url}")
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    return cap
+                else:
+                    cap.release()
+        except Exception as e:
+            print(f"HTTP failed: {e}")
             continue
     
-    raise RuntimeError(f"Cannot connect to camera channel 3")
+    # Final fallback to RTSP
+    return open_rtsp_fallback()
 
+def open_rtsp_fallback():
+    """Final fallback to RTSP"""
+    
+    print("Falling back to RTSP...")
+    
+    rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301"
+    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    
+    if cap.isOpened():
+        print("✓ RTSP connected")
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        return cap
+    
+    raise RuntimeError("All connection methods failed")
+
+def get_sdk_stream(cam, port):
+    """Get low-latency stream via SDK"""
+    
+    # Try different SDK streaming methods
+    sdk_methods = [
+        # Method 1: Live view via ISAPI (lowest latency)
+        lambda: cam.Streaming.channels[301].livePreview(method='get'),
+        
+        # Method 2: HTTP stream
+        lambda: cam.Streaming.channels[301].httpPreview(method='get'),
+        
+        # Method 3: Get stream URL
+        lambda: cam.Streaming.channels[301].url(method='get'),
+    ]
+    
+    for method in sdk_methods:
+        try:
+            result = method()
+            print(f"SDK stream result: {result}")
+            
+            # Extract URL from response
+            stream_url = extract_stream_url(result, port)
+            if stream_url:
+                print(f"Got SDK stream URL: {stream_url}")
+                
+                # Open with minimal latency settings
+                cap = open_low_latency_stream(stream_url)
+                if cap:
+                    return cap
+                    
+        except Exception as e:
+            print(f"SDK method failed: {e}")
+            continue
+    
+    return None
+
+def extract_stream_url(response, port):
+    """Extract stream URL from SDK response"""
+    
+    if isinstance(response, dict):
+        # Check common response fields
+        for field in ['url', 'Uri', 'streamUrl', 'rtspUrl', 'httpUrl']:
+            if field in response:
+                return response[field]
+    
+    # Construct SDK URL
+    # Format: rtsp://username:password@ip:port/Streaming/tracks/301?starttime=20240101T000000Z&endtime=20240101T235959Z
+    sdk_url = f"rtsp://Jafari:Asd12345@192.168.110.20:{port}/Streaming/tracks/301?transportmode=unicast"
+    return sdk_url
+
+def open_low_latency_stream(url):
+    """Open stream with minimal latency settings"""
+    
+    # Add low-latency parameters
+    if url.startswith('rtsp://'):
+        # RTSP with TCP and minimal buffering
+        url += "?rtsp_transport=tcp&buffer_size=102400&max_delay=100000"
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
+    else:
+        cap = cv2.VideoCapture(url)
+    
+    if cap.isOpened():
+        # Ultra-low latency settings
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)  # No buffer!
+        cap.set(cv2.CAP_PROP_FPS, 10)        # Lower FPS = lower latency
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+        
+        print(f"✓ Low-latency stream opened")
+        return cap
+    
+    return None
+
+def get_optimized_rtsp():
+    """Fallback to optimized RTSP if SDK fails"""
+    
+    # RTSP with ultra-low latency parameters
+    rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302"  # Use sub-stream!
+    
+    # Add FFMPEG parameters for minimal latency
+    ffmpeg_cmd = (
+        f"rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302"
+        f"?rtsp_transport=tcp"           # TCP instead of UDP
+        f"&buffer_size=102400"           # Smaller buffer
+        f"&max_delay=100000"             # 100ms max delay
+        f"&fflags=nobuffer"              # No buffering
+        f"&flags=low_delay"              # Low delay flag
+        f"&analyzeduration=100000"       # Shorter analysis
+    )
+    
+    cap = cv2.VideoCapture(ffmpeg_cmd, cv2.CAP_FFMPEG)
+    
+    if cap.isOpened():
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 0)
+        cap.set(cv2.CAP_PROP_FPS, 10)
+        print("✓ Optimized RTSP connected (sub-stream)")
+        return cap
+    
+    return None
 
 
 def load_models(args):
