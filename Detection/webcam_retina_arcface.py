@@ -15,7 +15,10 @@ def parse_args():
     return parser.parse_args()
 
 def open_capture(camera_id):
-    cap = cv2.VideoCapture(camera_id)
+
+    rtsp_url = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301/"
+    cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+    # cap = cv2.VideoCapture(camera_id)
     if not cap.isOpened():
         raise RuntimeError(f"Cannot open camera {camera_id}")
     
