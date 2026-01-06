@@ -258,6 +258,314 @@ def frame_generator(container, webCamUsage=True, max_width=1280, max_height=720)
             frame = packet.to_ndarray(format="bgr24")
             yield frame
 
+import cv2
+import numpy as np
+import torch
+import kornia.geometry.transform as K
+
+
+def detect_faces_retinaface1(det_session, rec_session, client, frame, det_thresh=0.5, args=None):
+    """
+    Detect faces using RetinaFace ONNX model, align, resize, 
+    extract embeddings in batch, and recognize faces.
+    Returns a list of (bbox, person, score) tuples.
+    """
+    # Initialize RetinaFace with the session
+    detector = RetinaFace(model_file=None, session=det_session)
+    
+    # Detect faces
+    try:
+        bboxes, landmarks = detector.detect(frame, input_size=(640, 640))
+    except TypeError:
+        try:
+            bboxes, landmarks = detector.detect(frame)
+        except Exception as e:
+            print(f"Detection error: {e}")
+            return []
+
+    if bboxes is None or len(bboxes) == 0:
+        return []
+
+    batch_faces = []
+    batch_bboxes = []
+
+    for i in range(len(bboxes)):
+        bbox = bboxes[i]
+        if len(bbox) < 4:
+            continue
+
+        x1, y1, x2, y2 = bbox[:4]
+        score = bbox[4] if len(bbox) > 4 else 0.5
+        if score < det_thresh:
+            continue
+
+        landmark = landmarks[i] if landmarks is not None and i < len(landmarks) else None
+
+        # Align or crop face
+        aligned_face = None
+        if landmark is not None:
+            try:
+                aligned_face = face_align.norm_crop(frame, landmark)
+            except:
+                aligned_face = None
+
+        if aligned_face is None or aligned_face.size == 0:
+            margin = 0.2
+            h, w = frame.shape[:2]
+            x1m = max(0, int(x1 - (x2 - x1) * margin))
+            y1m = max(0, int(y1 - (y2 - y1) * margin))
+            x2m = min(w, int(x2 + (x2 - x1) * margin))
+            y2m = min(h, int(y2 + (y2 - y1) * margin))
+            aligned_face = frame[y1m:y2m, x1m:x2m]
+
+        if aligned_face.size == 0:
+            continue
+
+        aligned_face = cv2.resize(aligned_face, (112, 112))
+        batch_faces.append(aligned_face)
+        batch_bboxes.append([x1, y1, x2, y2])
+
+    if not batch_faces:
+        return []
+
+    # 1️⃣ Batch preprocessing
+    batch_array = np.stack(batch_faces, axis=0).astype(np.float32)
+    batch_array = (batch_array - 127.5) / 128.0
+    batch_array = np.transpose(batch_array, (0, 3, 1, 2))
+
+    input_name = rec_session.get_inputs()[0].name
+    output_name = rec_session.get_outputs()[0].name
+
+    # 2️⃣ Run embeddings in batch
+    embeddings = rec_session.run([output_name], {input_name: batch_array})[0]
+    embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+    # 3️⃣ Recognize all faces in batch
+    recognized_faces = []
+    for bbox, emb in zip(batch_bboxes, embeddings):
+        person, score = recognize_face(emb, client, args)
+        recognized_faces.append((np.array(bbox, dtype=np.float32), person, score))
+
+    return recognized_faces
+
+
+
+
+import torch
+import numpy as np
+import cv2
+import kornia.geometry.transform as K
+
+
+
+
+
+
+
+
+import cv2
+import numpy as np
+import torch
+
+
+def detect_faces_retinaface_gpu21(det_session, rec_session, client, frame, det_thresh=0.5, args=None):
+    """
+    Detect faces using RetinaFace ONNX model, align on GPU, extract embeddings in batch,
+    and recognize all faces using vectorized batch cosine similarity.
+    
+    Returns a list of (bbox, person, score) tuples.
+    """
+    # 1️⃣ Initialize RetinaFace
+    detector = RetinaFace(model_file=None, session=det_session)
+
+    # 2️⃣ Detect faces
+    try:
+        bboxes, landmarks = detector.detect(frame, input_size=(640, 640))
+    except TypeError:
+        try:
+            bboxes, landmarks = detector.detect(frame)
+        except Exception as e:
+            print(f"Detection error: {e}")
+            return []
+
+    if bboxes is None or len(bboxes) == 0:
+        return []
+
+    # 3️⃣ Prepare aligned faces for batch
+    batch_faces = []
+    batch_bboxes = []
+
+    for i, bbox in enumerate(bboxes):
+        if len(bbox) < 4:
+            continue
+
+        x1, y1, x2, y2 = bbox[:4]
+        score = bbox[4] if len(bbox) > 4 else 0.5
+        if score < det_thresh:
+            continue
+
+        landmark = landmarks[i] if landmarks is not None and i < len(landmarks) else None
+
+        # Align or crop face
+        aligned_face = None
+        if landmark is not None:
+            try:
+                # Use GPU-based face alignment
+                aligned_face = face_align.norm_crop(frame, landmark, device='cuda')  # modify norm_crop to support GPU
+            except:
+                aligned_face = None
+
+        if aligned_face is None or aligned_face.size == 0:
+            # Fallback to bbox crop
+            margin = 0.2
+            h, w = frame.shape[:2]
+            x1m = max(0, int(x1 - (x2 - x1) * margin))
+            y1m = max(0, int(y1 - (y2 - y1) * margin))
+            x2m = min(w, int(x2 + (x2 - x1) * margin))
+            y2m = min(h, int(y2 + (y2 - y1) * margin))
+            aligned_face = frame[y1m:y2m, x1m:x2m]
+
+        if aligned_face.size == 0:
+            continue
+
+        aligned_face = cv2.resize(aligned_face, (112, 112))
+        batch_faces.append(aligned_face)
+        batch_bboxes.append([x1, y1, x2, y2])
+
+    if not batch_faces:
+        return []
+
+    # 4️⃣ Batch preprocess for ArcFace
+    batch_array = np.stack(batch_faces, axis=0).astype(np.float32)
+    batch_array = (batch_array - 127.5) / 128.0
+    batch_array = np.transpose(batch_array, (0, 3, 1, 2))  # NCHW
+
+    input_name = rec_session.get_inputs()[0].name
+    output_name = rec_session.get_outputs()[0].name
+
+    # 5️⃣ Run embeddings in batch
+    embeddings = rec_session.run([output_name], {input_name: batch_array})[0]
+    embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+    # 6️⃣ Vectorized recognition on GPU
+    emb_batch = torch.tensor(embeddings, device='cuda')
+    emb_batch = emb_batch / emb_batch.norm(dim=1, keepdim=True)
+
+    gallery_emb = torch.tensor(client['gallery_embeddings'], device='cuda')  # shape: [N, 512]
+    gallery_emb = gallery_emb / gallery_emb.norm(dim=1, keepdim=True)
+
+    sim_matrix = emb_batch @ gallery_emb.T  # cosine similarity [num_faces, N]
+    best_scores, best_idx = sim_matrix.max(dim=1)
+    persons = [client['person'][i] for i in best_idx]
+
+    # 7️⃣ Collect recognized faces
+    recognized_faces = [
+        (np.array(bbox, dtype=np.float32), person, score.item())
+        for bbox, person, score in zip(batch_bboxes, persons, best_scores)
+    ]
+
+    return recognized_faces
+
+
+def detect_faces_retinaface_gpu2(
+    det_session,
+    rec_session,
+    client,
+    frame,
+    det_thresh=0.5,
+    args=None
+):
+    """
+    RetinaFace detection + batch ArcFace embedding + Qdrant recognition.
+    Returns: [(bbox, person, score), ...]
+    """
+
+    detector = RetinaFace(model_file=None, session=det_session)
+
+    # 1️⃣ Detect faces
+    try:
+        bboxes, landmarks = detector.detect(frame, input_size=(640, 640))
+    except TypeError:
+        bboxes, landmarks = detector.detect(frame)
+
+    if bboxes is None or len(bboxes) == 0:
+        return []
+
+    batch_faces = []
+    batch_bboxes = []
+
+    h, w = frame.shape[:2]
+    margin = 0.2
+
+    # 2️⃣ Align / crop faces (CPU, unavoidable with current norm_crop)
+    for i, bbox in enumerate(bboxes):
+        if len(bbox) < 4:
+            continue
+
+        x1, y1, x2, y2 = bbox[:4]
+        score = bbox[4] if len(bbox) > 4 else 0.5
+        if score < det_thresh:
+            continue
+
+        landmark = landmarks[i] if landmarks is not None else None
+
+        aligned = None
+        if landmark is not None:
+            try:
+                aligned = face_align.norm_crop(frame, landmark)
+            except:
+                aligned = None
+
+        if aligned is None or aligned.size == 0:
+            x1m = max(0, int(x1 - (x2 - x1) * margin))
+            y1m = max(0, int(y1 - (y2 - y1) * margin))
+            x2m = min(w, int(x2 + (x2 - x1) * margin))
+            y2m = min(h, int(y2 + (y2 - y1) * margin))
+            aligned = frame[y1m:y2m, x1m:x2m]
+
+        if aligned.size == 0:
+            continue
+
+        aligned = cv2.resize(aligned, (112, 112))
+        batch_faces.append(aligned)
+        batch_bboxes.append([x1, y1, x2, y2])
+
+    if not batch_faces:
+        return []
+
+    # 3️⃣ Batch ArcFace preprocessing
+    batch_array = np.stack(batch_faces).astype(np.float32)
+    batch_array = (batch_array - 127.5) / 128.0
+    batch_array = batch_array.transpose(0, 3, 1, 2)
+
+    input_name = rec_session.get_inputs()[0].name
+    output_name = rec_session.get_outputs()[0].name
+
+    # 4️⃣ Batch ArcFace inference
+
+
+    embeddings = []
+    for i in range(batch_array.shape[0]):
+        emb = rec_session.run(
+            [output_name],
+            {input_name: batch_array[i:i+1]}
+        )[0]
+        embeddings.append(emb[0])
+
+    embeddings = np.stack(embeddings, axis=0)
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+
+
+    # 5️⃣ Qdrant recognition (UNAVOIDABLE loop)
+    recognized_faces = []
+    for bbox, emb in zip(batch_bboxes, embeddings):
+        person, score = recognize_face(emb, client, args)
+        recognized_faces.append(
+            (np.array(bbox, dtype=np.float32), person, score)
+        )
+
+    return recognized_faces
 
 
 def main():
@@ -265,10 +573,6 @@ def main():
     
     print("Loading models...")
     det_session, rec_session, client = load_models(args)
-    
-    print(f"Opening camera {args.webCam}...")
-
-
 
     container = open_capture(args.webCam)
 
@@ -280,153 +584,21 @@ def main():
         (255, 255, 255), (0, 165, 255)
     ]
     
-    fps = 0
-    frame_count = 0
-    start_time = cv2.getTickCount()
-    
-    face_cache = {}
-    cache_size = 50
-    cache_timeout = 2.0
     
     cv2.namedWindow("Face Recognition", cv2.WINDOW_NORMAL)
+   
     for frame in frame_generator(container, args.webCam):
+        recognized_faces = detect_faces_retinaface_gpu2(det_session, rec_session, client, frame, args.threshold, args)
 
-        faces = detect_faces_retinaface(det_session, frame, args.threshold)
-        
-        recognized_faces = []
-        for i, face in enumerate(faces):
-            bbox = face['bbox']
-            
-            # Check cache
-            cache_key = tuple(bbox.astype(int))
-            current_time = cv2.getTickCount() / cv2.getTickFrequency()
-            
-            if cache_key in face_cache:
-                cache_entry = face_cache[cache_key]
-                if current_time - cache_entry['timestamp'] < cache_timeout:
-                    person, score = cache_entry['person'], cache_entry['score']
-                else:
-                    # Extract and align face
-                    if face['landmark'] is not None:
-                        try:
-                            aligned_face = face_align.norm_crop(frame, face['landmark'])
-                        except:
-                            # Fallback to bbox crop
-                            x1, y1, x2, y2 = map(int, bbox)
-                            margin = 0.2
-                            h, w = frame.shape[:2]
-                            x1 = max(0, int(x1 - (x2 - x1) * margin))
-                            y1 = max(0, int(y1 - (y2 - y1) * margin))
-                            x2 = min(w, int(x2 + (x2 - x1) * margin))
-                            y2 = min(h, int(y2 + (y2 - y1) * margin))
-                            aligned_face = frame[y1:y2, x1:x2]
-                            if aligned_face.size == 0:
-                                continue
-                            aligned_face = cv2.resize(aligned_face, (112, 112))
-                    else:
-                        # Crop using bbox
-                        x1, y1, x2, y2 = map(int, bbox)
-                        margin = 0.2
-                        h, w = frame.shape[:2]
-                        x1 = max(0, int(x1 - (x2 - x1) * margin))
-                        y1 = max(0, int(y1 - (y2 - y1) * margin))
-                        x2 = min(w, int(x2 + (x2 - x1) * margin))
-                        y2 = min(h, int(y2 + (y2 - y1) * margin))
-                        aligned_face = frame[y1:y2, x1:x2]
-                        if aligned_face.size == 0:
-                            continue
-                        aligned_face = cv2.resize(aligned_face, (112, 112))
-                    
-                    # Extract embedding
-                    embedding = extract_embedding_arcface(rec_session, aligned_face)
-                    
-                    # Recognize
-                    person, score = recognize_face(embedding, client, args)
-                    face_cache[cache_key] = {
-                        'person': person, 
-                        'score': score, 
-                        'timestamp': current_time
-                    }
-            else:
-                # Extract and align face
-                if face['landmark'] is not None:
-                    try:
-                        aligned_face = face_align.norm_crop(frame, face['landmark'])
-                    except:
-                        # Fallback to bbox crop
-                        x1, y1, x2, y2 = map(int, bbox)
-                        margin = 0.2
-                        h, w = frame.shape[:2]
-                        x1 = max(0, int(x1 - (x2 - x1) * margin))
-                        y1 = max(0, int(y1 - (y2 - y1) * margin))
-                        x2 = min(w, int(x2 + (x2 - x1) * margin))
-                        y2 = min(h, int(y2 + (y2 - y1) * margin))
-                        aligned_face = frame[y1:y2, x1:x2]
-                        if aligned_face.size == 0:
-                            continue
-                        aligned_face = cv2.resize(aligned_face, (112, 112))
-                else:
-                    # Crop using bbox
-                    x1, y1, x2, y2 = map(int, bbox)
-                    margin = 0.2
-                    h, w = frame.shape[:2]
-                    x1 = max(0, int(x1 - (x2 - x1) * margin))
-                    y1 = max(0, int(y1 - (y2 - y1) * margin))
-                    x2 = min(w, int(x2 + (x2 - x1) * margin))
-                    y2 = min(h, int(y2 + (y2 - y1) * margin))
-                    aligned_face = frame[y1:y2, x1:x2]
-                    if aligned_face.size == 0:
-                        continue
-                    aligned_face = cv2.resize(aligned_face, (112, 112))
-                
-                # Extract embedding
-                embedding = extract_embedding_arcface(rec_session, aligned_face)
-                
-                # Recognize
-                person, score = recognize_face(embedding, client, args)
-                face_cache[cache_key] = {
-                    'person': person, 
-                    'score': score, 
-                    'timestamp': current_time
-                }
-                
-                if len(face_cache) > cache_size:
-                    oldest_key = min(face_cache.keys(), 
-                                   key=lambda k: face_cache[k]['timestamp'])
-                    del face_cache[oldest_key]
-            
-            recognized_faces.append((bbox, person, score, i))
-        
-        # Draw all faces
-        for bbox, person, score, idx in recognized_faces:
+        # Draw all recognized faces
+        for bbox, person, score in recognized_faces:
             color_idx = hash(person) % len(colors)
             color = colors[color_idx]
             frame = draw_face_info(frame, bbox, person, score, color)
-        
-        # Calculate FPS
-        frame_count += 1
-        if frame_count % 30 == 0:
-            end_time = cv2.getTickCount()
-            time_elapsed = (end_time - start_time) / cv2.getTickFrequency()
-            fps = 30 / time_elapsed
-            start_time = end_time
-        
-        # Display info
-        cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Faces: {len(faces)}", (10, 60),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, f"Det thresh: {args.threshold}", (10, 90),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(frame, "Press 'q' to quit", (10, frame.shape[0] - 20),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        
-        cv2.imshow('Face Recognition', frame)
-        
+
+        cv2.imshow("Face Recognition", frame)
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
-    
-  
     cv2.destroyAllWindows()
     print("Face recognition stopped.")
 
