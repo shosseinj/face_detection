@@ -5,30 +5,25 @@ import onnxruntime as ort
 from qdrant_client import QdrantClient
 from insightface.utils import face_align
 from insightface.model_zoo.retinaface import RetinaFace
+import av
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+    
 def parse_args():
     parser = argparse.ArgumentParser("Real-time Face Recognition from Webcam")
     parser.add_argument("--gpu", type=int, default=0, help="GPU ID (-1 for CPU)")
     parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold")
     parser.add_argument("--collection", type=str, default="n3", help="Qdrant collection name")
-    parser.add_argument("--camera", type=int, default=0, help="Camera device index")
+    parser.add_argument("--webCam", type=str2bool, default=False, help="Camera device index")
     return parser.parse_args()
-
-
-def resize_frame(frame, target_width=2048):
-    """Resize frame for display while maintaining aspect ratio"""
-    if frame is None:
-        return None
-    
-    height, width = frame.shape[:2]
-    
-    # Calculate new dimensions while maintaining aspect ratio
-    aspect_ratio = height / width
-    new_height = int(target_width * aspect_ratio)
-    
-    # Resize
-    resized = cv2.resize(frame, (target_width, new_height))
-    return resized
 
 
 
@@ -85,6 +80,7 @@ def load_models(args):
     client = QdrantClient(url="http://localhost:6333")
     
     return det_session, rec_session, client
+
 def detect_faces_retinaface(det_session, frame, det_thresh=0.5):
     """Detect faces using RetinaFace ONNX model"""
     # Initialize RetinaFace with the session
@@ -221,22 +217,62 @@ def draw_face_info(frame, bbox, person, score, color):
     
     return frame
 
+
+def open_capture(webCam):
+    if webCam:
+        cap = cv2.VideoCapture(int(0))
+        if not cap.isOpened():
+            raise RuntimeError("Cannot open camera")
+    
+    else:
+        RTSP_URL = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301"
+        cap = av.open(RTSP_URL, options={"rtsp_transport": "tcp", "flags": "low_delay", "fflags": "nobuffer"}).decode(video=0)
+
+    return cap
+
+import torch
+def require_cuda():
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA GPU REQUIRED")
+    device = torch.device("cuda")
+    print("Using GPU:", torch.cuda.get_device_name(0))
+    return device
+
+
+def frame_generator(container, webCamUsage=True, max_width=1280, max_height=720):
+    """
+    Unified frame generator with resizing to fit the monitor/window.
+    - webCamUsage=True: container is cv2.VideoCapture
+    - webCamUsage=False: container is PyAV container (RTSP)
+    - max_width, max_height: maximum size to fit frames to (maintains aspect ratio)
+    """
+
+    if webCamUsage:
+        while True:
+            ret, frame = container.read()
+            if not ret:
+                break
+            # frame = resize_to_fit(frame, max_width, max_height)
+            yield frame
+    else:
+        for packet in container:
+            frame = packet.to_ndarray(format="bgr24")
+            # frame = resize_to_fit(frame, max_width, max_height)
+            yield frame
+
+
+
 def main():
     args = parse_args()
     
     print("Loading models...")
     det_session, rec_session, client = load_models(args)
     
-    print(f"Opening camera {args.camera}...")
+    print(f"Opening camera {args.webCam}...")
 
-    import av
-    import cv2
-    import numpy as np
 
-    RTSP_URL = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301"
 
-    container = av.open(RTSP_URL, options={"rtsp_transport": "tcp", "flags": "low_delay", "fflags": "nobuffer"})
-
+    container = open_capture(args.webCam)
 
     print("Starting real-time face recognition. Press 'q' to quit.")
     
@@ -254,20 +290,9 @@ def main():
     cache_size = 50
     cache_timeout = 2.0
     
- 
-    
-    for frame in container.decode(video=0):
-        frame = frame.to_ndarray(format="bgr24")
+    cv2.namedWindow("Face Recognition", cv2.WINDOW_NORMAL)
+    for frame in frame_generator(container, args.webCam):
 
-        
-        # frame = cv2.flip(frame, 1)
-        frame = resize_frame(frame)
-        cv2.imshow('Real-time Face Recognition (RetinaFace+ArcFace)', frame)
-        
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
-        # continue
-        # Detect faces with RetinaFace
         faces = detect_faces_retinaface(det_session, frame, args.threshold)
         
         recognized_faces = []
@@ -398,7 +423,7 @@ def main():
         cv2.putText(frame, "Press 'q' to quit", (10, frame.shape[0] - 20),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         
-        cv2.imshow('Real-time Face Recognition (RetinaFace+ArcFace)', frame)
+        cv2.imshow('Face Recognition', frame)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
