@@ -252,12 +252,10 @@ def frame_generator(container, webCamUsage=True, max_width=1280, max_height=720)
             ret, frame = container.read()
             if not ret:
                 break
-            # frame = resize_to_fit(frame, max_width, max_height)
             yield frame
     else:
         for packet in container:
             frame = packet.to_ndarray(format="bgr24")
-            # frame = resize_to_fit(frame, max_width, max_height)
             yield frame
 
 
