@@ -6,7 +6,7 @@
             "type": "debugpy",
             "request": "launch",
             // "program": "${workspaceFolder}/Embedding/Embedding.py",
-            "program": "${workspaceFolder}/Detection/hossein.py",
+            "program": "${workspaceFolder}/Detection/main.py",
             "cwd": "${workspaceFolder}/Detection/",
             "console": "integratedTerminal"
         }

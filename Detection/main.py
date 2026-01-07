@@ -6,6 +6,19 @@ from qdrant_client import QdrantClient
 from insightface.utils import face_align
 from insightface.model_zoo.retinaface import RetinaFace
 import av
+import matplotlib.pyplot as plt
+import os
+import cv2
+import time
+from ultralytics import YOLO
+
+SAVE_DIR = "detected_faces"
+os.makedirs(SAVE_DIR, exist_ok=True)
+
+
+SAVE_DIR_PERSON = "detected_PERSON"
+os.makedirs(SAVE_DIR_PERSON, exist_ok=True)
+
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -20,9 +33,11 @@ def str2bool(v):
 def parse_args():
     parser = argparse.ArgumentParser("Real-time Face Recognition from Webcam")
     parser.add_argument("--gpu", type=int, default=0, help="GPU ID (-1 for CPU)")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Detection threshold")
+    parser.add_argument("--threshold", type=float, default=0.01, help="Detection threshold")
     parser.add_argument("--collection", type=str, default="n3", help="Qdrant collection name")
     parser.add_argument("--webCam", type=str2bool, default=False, help="Camera device index")
+    parser.add_argument("--save_detected", type=str2bool, default=False, help="Camera device index")
+    parser.add_argument("--save_person", type=str2bool, default=True, help="Camera device index")
     return parser.parse_args()
 
 
@@ -89,7 +104,7 @@ def detect_faces_retinaface(det_session, frame, det_thresh=0.5):
     # Detect faces - specify input_size
     try:
         # Try with input_size parameter
-        bboxes, landmarks = detector.detect(frame, input_size=(640, 640))
+        bboxes, landmarks = detector.detect(frame, input_size=(320, 320))
     except TypeError:
         try:
             # Try without input_size
@@ -225,7 +240,7 @@ def open_capture(webCam):
             raise RuntimeError("Cannot open camera")
     
     else:
-        RTSP_URL = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/301"
+        RTSP_URL = "rtsp://Jafari:Asd12345@192.168.110.20:554/Streaming/Channels/302"
         cap = av.open(RTSP_URL, options={"rtsp_transport": "tcp", "flags": "low_delay", "fflags": "nobuffer"}).decode(video=0)
 
     return cap
@@ -239,12 +254,28 @@ def require_cuda():
     return device
 
 
-def frame_generator(container, webCamUsage=True, max_width=1280, max_height=720):
+
+import cv2
+
+def resize_to_fit(frame, max_width, max_height):
+    h, w = frame.shape[:2]
+
+    scale = min(max_width / w, max_height / h, 1.0)
+    if scale == 1.0:
+        return frame
+
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+
+    return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+
+
+def frame_generator(container, webCamUsage=True, max_width=3000, max_height=3000): # 1280 *720
     """
-    Unified frame generator with resizing to fit the monitor/window.
+    Unified frame generator with resizing.
     - webCamUsage=True: container is cv2.VideoCapture
     - webCamUsage=False: container is PyAV container (RTSP)
-    - max_width, max_height: maximum size to fit frames to (maintains aspect ratio)
     """
 
     if webCamUsage:
@@ -252,16 +283,17 @@ def frame_generator(container, webCamUsage=True, max_width=1280, max_height=720)
             ret, frame = container.read()
             if not ret:
                 break
+
+            frame = resize_to_fit(frame, max_width, max_height)
             yield frame
+
     else:
         for packet in container:
             frame = packet.to_ndarray(format="bgr24")
+
+            frame = resize_to_fit(frame, max_width, max_height)
             yield frame
 
-import cv2
-import numpy as np
-import torch
-import kornia.geometry.transform as K
 
 
 def detect_faces_retinaface1(det_session, rec_session, client, frame, det_thresh=0.5, args=None):
@@ -355,7 +387,7 @@ def detect_faces_retinaface_gpu2(
     rec_session,
     client,
     frame,
-    det_thresh=0.5,
+    det_thresh=0.01,
     args=None
 ):
     """
@@ -363,14 +395,31 @@ def detect_faces_retinaface_gpu2(
     Returns: [(bbox, person, score), ...]
     """
 
+
+    H, W = frame.shape[:2]
+
+    # ---------------------------
+    # 1️⃣ YOLO PERSON DETECTION
+    # ---------------------------
+    yolo_result = yolo(
+        frame,
+        imgsz=960,
+        conf=0.25,
+        iou=0.5,
+        classes=[0],   # person only
+        device=0,
+        verbose=False
+    )[0]
+
+    if yolo_result.boxes is None:
+        return []
+    
+
     detector = RetinaFace(model_file=None, session=det_session)
 
-    # 1️⃣ Detect faces
-    try:
-        bboxes, landmarks = detector.detect(frame, input_size=(640, 640))
-    except TypeError:
-        bboxes, landmarks = detector.detect(frame)
 
+    bboxes, landmarks = detector.detect(frame, input_size=(960, 960))
+   
     if bboxes is None or len(bboxes) == 0:
         return []
 
@@ -413,6 +462,10 @@ def detect_faces_retinaface_gpu2(
         batch_faces.append(aligned)
         batch_bboxes.append([x1, y1, x2, y2])
 
+        if args.save_detected:
+            face_name = f"face_{int(time.time() * 1000)}.jpg"
+            cv2.imwrite(os.path.join(SAVE_DIR, face_name), aligned)
+
     if not batch_faces:
         return []
 
@@ -451,6 +504,182 @@ def detect_faces_retinaface_gpu2(
     return recognized_faces
 
 
+
+
+
+import cv2
+import numpy as np
+from insightface.app import FaceAnalysis
+from insightface.utils import face_align
+from ultralytics import YOLO
+
+def detect_faces_retinaface_gpu3(
+    det_session,
+    rec_session,
+    client,
+    frame,
+    det_thresh=0.01,
+    args=None,
+    yolo=None
+):
+    """
+    YOLOv8-person → RetinaFace → ArcFace(batch) → Qdrant
+    Returns: [(bbox, person, score)]
+    """
+
+    H, W = frame.shape[:2]
+
+    low_res=(640, 384)
+    small_frame = cv2.resize(frame, low_res)
+    scale_x = W / low_res[0]
+    scale_y = H / low_res[1]
+
+
+
+    # ---------------------------
+    # 1️⃣ YOLO PERSON DETECTION
+    # ---------------------------
+    yolo_result = yolo(
+        small_frame,
+        imgsz=low_res,
+        conf=0.25,
+        iou=0.5,
+        classes=[0],   # person only
+        device=0,
+        verbose=False
+    )[0]
+
+    if yolo_result.boxes is None:
+        return []
+
+    detector = RetinaFace(model_file=None, session=det_session)
+
+    batch_faces = []
+    batch_bboxes = []
+
+    # ---------------------------
+    # 2️⃣ LOOP OVER PERSONS
+    # ---------------------------
+    for box in yolo_result.boxes.xyxy.cpu().numpy():
+        px1, py1, px2, py2 = map(int, [
+        box[0] * scale_x,
+        box[1] * scale_y,
+        box[2] * scale_x,
+        box[3] * scale_y
+    ])
+
+    
+        # expand person bbox
+        margin = 0.15
+        pw, ph = px2 - px1, py2 - py1
+        px1 = max(0, int(px1 - pw * margin))
+        py1 = max(0, int(py1 - ph * margin))
+        px2 = min(W, int(px2 + pw * margin))
+        py2 = min(H, int(py2 + ph * margin))
+
+        pw = px2 - px1
+        ph = py2 - py1
+
+        # 🔥 GUARD 1: too small person
+        if (pw * ph) < 0.01 * (W * H):
+            continue
+
+        # 🔥 HEAD REGION ONLY
+        head_y2 = py1 + int(0.6 * ph)
+        person_crop = frame[py1:head_y2, px1:px2]
+
+        if person_crop.size == 0:
+            continue
+
+
+
+        
+        if args.save_person:
+            person_name = f"person_{int(time.time() * 1000)}.jpg"
+            cv2.imwrite(os.path.join(SAVE_DIR_PERSON, person_name), person_crop)
+        if person_crop.size == 0:
+            continue
+
+        # ---------------------------
+        # 3️⃣ RETINAFACE ON PERSON ROI
+        # ---------------------------
+        try:
+            bboxes, landmarks = detector.detect(
+                person_crop, input_size=(640, 348)
+            )
+        except:
+            continue
+
+        if bboxes is None:
+            continue
+
+        for i, bbox in enumerate(bboxes):
+            if len(bbox) < 4:
+                continue
+
+            x1, y1, x2, y2 = bbox[:4]
+            score = bbox[4] if len(bbox) > 4 else 1.0
+            if score < det_thresh:
+                continue
+
+            lm = landmarks[i] if landmarks is not None else None
+
+            # ---------------------------
+            # 4️⃣ FACE ALIGN
+            # ---------------------------
+            aligned = None
+            if lm is not None:
+                try:
+                    aligned = face_align.norm_crop(person_crop, lm)
+                except:
+                    aligned = None
+
+            if aligned is None or aligned.size == 0:
+                aligned = person_crop[int(y1):int(y2), int(x1):int(x2)]
+
+            if aligned.size == 0:
+                continue
+
+            aligned = cv2.resize(aligned, (112, 112))
+            batch_faces.append(aligned)
+
+            # global bbox
+            gx1 = px1 + x1
+            gy1 = py1 + y1
+            gx2 = px1 + x2
+            gy2 = py1 + y2
+            batch_bboxes.append([gx1, gy1, gx2, gy2])
+
+    if not batch_faces:
+        return []
+
+    # ---------------------------
+    # 5️⃣ ARCFACE BATCH
+    # ---------------------------
+    batch = np.stack(batch_faces).astype(np.float32)
+    batch = (batch - 127.5) / 128.0
+    batch = np.transpose(batch, (0, 3, 1, 2))
+
+    input_name = rec_session.get_inputs()[0].name
+    output_name = rec_session.get_outputs()[0].name
+
+    embeddings = rec_session.run(
+        [output_name], {input_name: batch}
+    )[0]
+
+    embeddings /= np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+    # ---------------------------
+    # 6️⃣ QDRANT SEARCH (still loop, unavoidable)
+    # ---------------------------
+    results = []
+    for bbox, emb in zip(batch_bboxes, embeddings):
+        person, score = recognize_face(emb, client, args)
+        results.append((np.array(bbox, dtype=np.float32), person, score))
+
+    return results
+
+
 def main():
     args = parse_args()
     
@@ -469,9 +698,9 @@ def main():
     
     
     cv2.namedWindow("Face Recognition", cv2.WINDOW_NORMAL)
-   
+    yolo = YOLO("yolov8n.pt") 
     for frame in frame_generator(container, args.webCam):
-        recognized_faces = detect_faces_retinaface_gpu2(det_session, rec_session, client, frame, args.threshold, args)
+        recognized_faces = detect_faces_retinaface_gpu3(det_session, rec_session, client, frame, args.threshold, args, yolo)
 
         # Draw all recognized faces
         for bbox, person, score in recognized_faces:
