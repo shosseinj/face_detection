@@ -46,7 +46,7 @@ def parse_args():
 def load_models(args):
     """Load RetinaFace and ArcFace ONNX models"""
     # Set up ONNX Runtime
-    providers = ['CUDAExecutionProvider', 'CPUExecutionProvider'] if args.gpu >= 0 else ['CPUExecutionProvider']
+    providers = ['CUDAExecutionProvider'] 
     
     # Load RetinaFace detector
     print("Loading RetinaFace detector...")
@@ -1038,9 +1038,9 @@ def detect_persons(frame, yolo, face_detector,rec_session,client, args=None):
         # Face detection
         # -------------------------
         try:
+            retina_input = cv2.resize(face_crop, (640,640))
             bboxes, landmarks = face_detector.detect(
-                face_crop,
-             
+                retina_input,
                 input_size=(640,640)
             )
         except Exception as e:
@@ -1345,18 +1345,6 @@ def detect_faces_retinaface_gpu7(frame, yolo, detector, rec_session,client,args=
         output_frame = frame
         results = person_boxes_org
 
-    # faces = detect_faces_in_person(person_boxes, frame, detector, args)
-    # if show_type=='face':
-    
-
-
-
-
-    # Return just face detection results for now
-    # Step 3 (recognition) would be called separately
-    # return [(bbox, None, score) for bbox, _, score in faces]
-
-            # Save person crop if requested
 
 
 
@@ -1383,6 +1371,20 @@ def main():
     
     cv2.namedWindow("Face Recognition", cv2.WINDOW_NORMAL)
     yolo = YOLO("yolov8n.pt") 
+
+    import onnxruntime
+
+    providers = [
+        ('CUDAExecutionProvider', {
+            'device_id': 0,
+        }),
+        'CPUExecutionProvider'
+    ]
+
+    MODEL_PATH = "/home/shosseinj/Music/retinaface-pytorch/models/retinaface.onnx"
+    det_session = onnxruntime.InferenceSession(MODEL_PATH, providers=providers)
+
+
     detector = RetinaFace(model_file=None, session=det_session)
 
     for frame in frame_generator(container, args.webCam):
