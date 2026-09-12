@@ -35,3 +35,23 @@ The detection code and much of its Git history originate from Yakhyokhuja Valikh
 ## Data Note
 
 Vector databases and face embeddings may contain biometric information. Public versions of this repository should contain only synthetic or explicitly shareable example data; deployment databases should not be committed to source control.
+
+
+## Goal
+
+The local work connects an upstream RetinaFace detector to an embedding and vector-search experiment, with Qdrant used to store and retrieve face representations.
+
+## Installation
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+docker run --name face-qdrant -p 6333:6333 -p 6334:6334 qdrant/qdrant
+```
+
+Use a separate Qdrant volume for private experiments rather than the tracked `qdrant_storage/` directory.
+
+## Working with the Repository
+
+Detection code is under `Detection/`; embedding and indexing code is under `Embedding/`. Start Qdrant first, configure collection and model paths, then run the documented `Detection/main.py` command. Only synthetic or consented images and embeddings should be used while testing.
